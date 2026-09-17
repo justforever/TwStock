@@ -1,0 +1,82 @@
+# TwStock 本機部署。用法（在 repo 根目錄）：
+#   cp .env.example .env   # 修改密碼
+#   docker compose -f deploy/docker-compose.yml --env-file .env up -d --build
+name: twstock
+
+x-db-url: &db_url "postgresql+psycopg://${POSTGRES_USER:-twstock}:${POSTGRES_PASSWORD:?請在 .env 設定 POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-twstock}"
+
+services:
+  db:
+    image: timescale/timescaledb:2.21.3-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-twstock}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?請在 .env 設定 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-twstock}
+      TZ: ${TZ:-Asia/Taipei}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: etl/Dockerfile
+    image: twstock-etl:local
+    command: ["alembic", "-c", "/app/db/alembic.ini", "upgrade", "head"]
+    environment:
+      DATABASE_URL: *db_url
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+    image: twstock-api:local
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: *db_url
+      TZ: ${TZ:-Asia/Taipei}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  etl:
+    build:
+      context: ..
+      dockerfile: etl/Dockerfile
+    image: twstock-etl:local
+    restart: unless-stopped
+    command: ["python", "-m", "twstock_etl.cli", "scheduler"]
+    environment:
+      DATABASE_URL: *db_url
+      FINMIND_TOKEN: ${FINMIND_TOKEN:-}
+      TZ: ${TZ:-Asia/Taipei}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    image: twstock-web:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata: {}

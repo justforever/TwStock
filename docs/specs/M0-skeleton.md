@@ -1803,4 +1803,4 @@ cd /home/claude/TwStock && TWSTOCK_TEST_DATABASE_URL=$(scripts/pg_temp.sh start)
 | T0-3 | ETL loader、job、CLI、排程 | T0-2 | DONE | `docs/reviews/T0-3.md` |
 | T0-4 | API：FastAPI 個股搜尋與健康檢查 | T0-1、T0-3（驗收用 CLI 載入） | DONE | `docs/reviews/T0-4.md` |
 | T0-5 | Web：React + Vite 搜尋頁雛形 | T0-4（契約） | DONE | `docs/reviews/T0-5.md` |
-| T0-6 | Docker Compose、Dockerfile、M0 整合驗收腳本 | T0-1～T0-5 | TODO | — |
+| T0-6 | Docker Compose、Dockerfile、M0 整合驗收腳本 | T0-1～T0-5 | DONE | `docs/reviews/T0-6.md` |

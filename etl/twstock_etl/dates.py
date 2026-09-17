@@ -1,7 +1,7 @@
 """日期解析工具。"""
 
 import re
-from datetime import date, datetime
+from datetime import date
 
 
 def parse_tw_date(value: str) -> date:

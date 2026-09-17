@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "twstock-db"
+version = "0.1.0"
+description = "TwStock 共用資料庫定義與 migration"
+requires-python = ">=3.11"
+dependencies = [
+  "sqlalchemy==2.0.43",
+  "alembic==1.16.5",
+  "psycopg[binary]==3.2.10",
+]
+
+[tool.setuptools.packages.find]
+include = ["twstock_db*"]

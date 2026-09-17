@@ -5,4 +5,4 @@
 - 設計計劃：[docs/plan.md](docs/plan.md)
 - 專案規則與目錄說明：[CLAUDE.md](CLAUDE.md)
 
-目前進度：M0（骨架）尚未開始。
+目前進度：M0（骨架）規格完成，實作中（見 [docs/specs/M0-skeleton.md](docs/specs/M0-skeleton.md)）。

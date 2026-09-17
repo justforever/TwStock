@@ -1801,6 +1801,6 @@ cd /home/claude/TwStock && TWSTOCK_TEST_DATABASE_URL=$(scripts/pg_temp.sh start)
 | T0-1 | Python 工作區、db 套件、Alembic migration、臨時 PostgreSQL | — | DONE | `docs/reviews/T0-1.md` |
 | T0-2 | ETL 來源 parser：個股清單（TWSE/TPEx ISIN）與 TWSE 休市日 | T0-1 | DONE | `docs/reviews/T0-2.md` |
 | T0-3 | ETL loader、job、CLI、排程 | T0-2 | DONE | `docs/reviews/T0-3.md` |
-| T0-4 | API：FastAPI 個股搜尋與健康檢查 | T0-1、T0-3（驗收用 CLI 載入） | TODO | — |
+| T0-4 | API：FastAPI 個股搜尋與健康檢查 | T0-1、T0-3（驗收用 CLI 載入） | DONE | `docs/reviews/T0-4.md` |
 | T0-5 | Web：React + Vite 搜尋頁雛形 | T0-4（契約） | TODO | — |
 | T0-6 | Docker Compose、Dockerfile、M0 整合驗收腳本 | T0-1～T0-5 | TODO | — |

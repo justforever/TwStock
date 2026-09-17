@@ -1,3 +1,4 @@
 -e ./db
 -e ./etl
+-e ./api
 pytest==8.4.2

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "twstock-api"
+version = "0.1.0"
+description = "TwStock API"
+requires-python = ">=3.11"
+dependencies = [
+  "twstock-db",
+  "fastapi==0.115.14",
+  "pydantic==2.11.9",
+  "uvicorn[standard]==0.35.0",
+  "httpx==0.28.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["twstock_api*"]

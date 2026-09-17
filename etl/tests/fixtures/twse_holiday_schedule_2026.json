@@ -1,0 +1,17 @@
+[
+  {"Name": "中華民國開國紀念日", "Date": "1150101", "Weekday": "四", "Description": "依規定放假1日。"},
+  {"Name": "國曆新年開始交易日", "Date": "1150102", "Weekday": "五", "Description": "國曆新年開始交易。"},
+  {"Name": "農曆春節前最後交易日", "Date": "1150211", "Weekday": "三", "Description": "農曆春節前最後交易日。"},
+  {"Name": "市場無交易，僅辦理結算交割作業", "Date": "1150212", "Weekday": "四", "Description": ""},
+  {"Name": "市場無交易，僅辦理結算交割作業", "Date": "1150213", "Weekday": "五", "Description": ""},
+  {"Name": "農曆除夕及春節", "Date": "1150216", "Weekday": "一", "Description": "依規定放假。"},
+  {"Name": "農曆除夕及春節", "Date": "1150217", "Weekday": "二", "Description": "依規定放假。"},
+  {"Name": "農曆除夕及春節", "Date": "1150218", "Weekday": "三", "Description": "依規定放假。"},
+  {"Name": "農曆除夕及春節", "Date": "1150219", "Weekday": "四", "Description": "依規定放假。"},
+  {"Name": "農曆除夕及春節", "Date": "1150220", "Weekday": "五", "Description": "調整放假。"},
+  {"Name": "農曆春節後開始交易日", "Date": "1150223", "Weekday": "一", "Description": "農曆春節後開始交易。"},
+  {"Name": "和平紀念日", "Date": "1150227", "Weekday": "五", "Description": "2月28日（星期六）逢例假日，於2月27日補假1日。"},
+  {"Name": "和平紀念日", "Date": "1150228", "Weekday": "六", "Description": "逢例假日。"},
+  {"Name": "兒童節及民族掃墓節", "Date": "1150403", "Weekday": "五", "Description": "補假。"},
+  {"Name": "兒童節及民族掃墓節", "Date": "1150406", "Weekday": "一", "Description": "補假。"}
+]

@@ -1,2 +1,3 @@
 -e ./db
+-e ./etl
 pytest==8.4.2

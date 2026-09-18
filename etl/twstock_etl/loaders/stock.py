@@ -4,7 +4,7 @@ import logging
 from collections.abc import Collection, Sequence
 from typing import Any
 
-from sqlalchemy import Connection, and_, func, insert, text
+from sqlalchemy import Connection, and_, func, insert, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from twstock_db.tables import stock
@@ -101,3 +101,11 @@ def deactivate_missing(conn: Connection, market: str, keep_ids: Collection[str])
     deactivated = result.rowcount or 0
     logger.info("已停用 %d 筆 %s 個股", deactivated, market)
     return deactivated
+
+
+def count_active_stocks(conn: Connection, market: str) -> int:
+    """回傳某市場目前 is_active=true 的個股筆數。"""
+    stmt = select(func.count()).select_from(stock)
+    stmt = stmt.where((stock.c.market == market) & (stock.c.is_active))
+    result = conn.execute(stmt).scalar()
+    return result or 0

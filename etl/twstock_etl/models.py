@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Literal
 
 Market = Literal["TWSE", "TPEx", "ESB"]
@@ -38,3 +39,46 @@ class CalendarDay:
     trade_date: date
     is_open: bool
     note: str | None
+
+
+@dataclass(frozen=True)
+class PriceRecord:
+    """個股日成交紀錄（未還原原始價）。"""
+
+    stock_id: str
+    trade_date: date
+    open: Decimal | None
+    high: Decimal | None
+    low: Decimal | None
+    close: Decimal | None
+    change: Decimal | None  # 含正負號；無法判斷符號時為 None
+    volume: int  # 成交股數
+    turnover: Decimal  # 成交金額（元）
+    transactions: int  # 成交筆數
+    source: str  # "TWSE" 或 "TPEx"
+
+
+@dataclass(frozen=True)
+class IndexRecord:
+    """指數日 K 紀錄。"""
+
+    index_id: str  # M1 只有 "TAIEX"
+    trade_date: date
+    open: Decimal | None
+    high: Decimal | None
+    low: Decimal | None
+    close: Decimal | None
+    volume: int | None = None  # M1 一律 None
+
+
+@dataclass(frozen=True)
+class AdjFactorRecord:
+    """除權息還原係數紀錄。"""
+
+    stock_id: str
+    ex_date: date
+    factor: Decimal  # 除權息參考價 ÷ 除權息前收盤價，8 位小數
+    prev_close: Decimal | None
+    reference_price: Decimal | None
+    kind: str | None  # 除息 / 除權 / 除權息
+    source: str = "TWSE"

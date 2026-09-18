@@ -2212,7 +2212,7 @@ cd /home/claude/TwStock && docker compose -f deploy/docker-compose.yml --env-fil
 | 任務 | 標題 | 相依 | 狀態 | 審查報告 |
 | --- | --- | --- | --- | --- |
 | T1-1 | Migration 0002：價格三表 + etl_job_log，與 hypertable 雙簽名 | — | DONE | `docs/reviews/T1-1.md` |
-| T1-2 | 來源 parser：日成交（上市／上櫃）、加權指數、除權除息 | T1-1（models 共用，可平行但順序照排） | TODO | — |
+| T1-2 | 來源 parser：日成交（上市／上櫃）、加權指數、除權除息 | T1-1（models 共用，可平行但順序照排） | DONE | `docs/reviews/T1-2.md` |
 | T1-3 | Loader：價格三表寫入、未知代號過濾、etl_job_log 紀錄 | T1-1、T1-2 | TODO | — |
 | T1-4 | Job、CLI、排程：每日盤後自動更新，並修掉 U-3 與 U-5 | T1-3 | TODO | — |
 | T1-5 | 回補腳本：速率限制、斷點續傳、進度輸出 | T1-4 | TODO | — |

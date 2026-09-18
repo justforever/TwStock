@@ -219,3 +219,27 @@
 - 理由：M1 的完成標準是「任一個股看得到正確還原 K 線，且排程每天自動更新」。櫃買指數與上櫃除權息各自需要再賭一個格式未知的端點，而它們對這個完成標準都不是必要條件；把它們留到 M2，可以和籌碼資料一起用同一批真實回應驗證。手動重跑需要寫入型 API 與權限考量（即使只在內網），M1 先不開。
 - 替代方案：M1 一次做滿（任務數與未驗證端點數同時翻倍，違反「每階段結束都是可用系統」的節奏）。
 - 影響：schema 已保留擴充空間——`index_daily` 主鍵含 `index_id`，`adj_factor` 有 `source` 欄位，兩者加來源都不必改結構。上櫃個股在 M1 勾選「還原價」時看到的就是原始 K 線，前端不必特別處理。
+
+## D-024　ETL job 函式一律回傳結果物件；`JobSkipped` 不跨函式邊界傳播
+
+- 日期：2026-09-19（M1，T1-4 第 3 輪審查後補記）
+- 決策：`jobs.py` 中每個 job 函式都回傳自己的 `@dataclass(frozen=True)`，欄位一律包含 `rows: int` 與 `skip_reason: str | None`（`PriceJobResult`、`IndexJobResult`、`AdjFactorJobResult`），不准回傳裸 `int`。`loaders/job_log.py` 的 `job_run` 維持 T1-3 定案的契約——`JobSkipped` 由 `job_run` 攔下記成 `status='skipped'`、**不往外拋**；job 函式把 `run.note` 原樣放進 `skip_reason`，呼叫端（CLI、`scheduler.py`、T1-5 回補）一律看回傳值，**全專案不准出現 `except JobSkipped`**。job 函式結尾只能有一個 `return`，所有回傳值用到的區域變數在進 `with job_run(...)` 之前就給好預設值。
+- 理由：T1-4 連續三輪 REQUEST_CHANGES 的 Blocker 全部源自這個契約沒被寫清楚：(1) 第 1 輪為了讓 skip 傳到 CLI 而改掉 `job_log.py`，讓排程器把每天正常的「已完成，略過」用 `logger.exception` 記成 ERROR；(2) 第 2 輪只修了三個 job 中的一個，另外兩個在 skip 後回傳未賦值的區域變數而拋 `UnboundLocalError`，CLI 還留下 `except JobSkipped` 死碼造成 `NameError`；(3) 第 3 輪回傳型別從 `int` 改成 dataclass，`scheduler.py` 兩個呼叫端沒跟著改，`logger.info("… %d 筆", result)` 在 `logging` 內部拋 `TypeError`。「略過」是每日排程的正常路徑（見 D-021），用例外表達它，就等於讓正常路徑不斷踩到呼叫端的錯誤處理；用回傳值表達，型別檢查與測試都看得見。單一 `return` + 事先初始化則讓 `UnboundLocalError` 這一類缺陷結構上不可能發生。
+- 替代方案：讓 `JobSkipped` 往外拋，呼叫端各自 `except JobSkipped`（每多一個呼叫端就多一個會漏寫的地方，第 1 輪已經實證失敗）；回傳 `int | None`，`None` 代表 skip（丟失 skip 原因，CLI 印不出 `reason=`）；改用 `typing.Protocol` 或共用基底 dataclass（對能力有限的 Coder 而言抽象成本高於收益，三個 dataclass 各自扁平就夠）。
+- 影響：T1-5 `backfill.py` 的斷點續傳直接讀 `result.skip_reason` 判斷是否計入 `skipped`，不必包 `try/except`；T1-6 不直接呼叫 job 函式，不受影響。規格 `docs/specs/M1-price.md` §T1-4 已同步改寫（§3 共同契約、§4 skip 輸出格式、§5 `_log_job_outcome`）。
+
+## D-025　每個會寫資料庫的 ETL job 函式都要包 `job_run`；`etl_job_log` 不得出現「正常路徑被記成 failed」
+
+- 日期：2026-09-19（M1，T1-4 第 3 輪審查後補記）
+- 決策：`refresh_stock_list`（`stock_list_twse` / `stock_list_tpex`）、`refresh_trading_calendar`（`trading_calendar`）、`rebuild_calendar_from_index`（`calendar_from_index`）比照三個價格 job 各包一層 `job_run`，簽名與回傳值不變。這些 job 不做 `has_successful_run` 去重、也不會 skip。「官方尚未公布明年度日曆」這種預期內的情況，必須在**進入 `job_run` 之前**判斷掉，只記 INFO，不可以留下 `status='failed'` 的列；`refresh_calendar_with_next_year` 因此改成「下載／解析一次 → 每年各 `build_calendar` → 私有 `_write_calendar_year` 寫入並記錄」。
+- 理由：`etl_job_log` 是 ETL 狀態頁（規格 §5.4／§5.5）唯一的資料來源，也是 D-021 去重與 T1-5 斷點續傳的依據。規格 §4 的 job 名稱表從 T1-3 起就列了 `stock_list_*` 與 `trading_calendar`，但實作三輪都沒補上，等於每天真的在跑的兩個 job 在狀態頁上完全空白。同時，「近 7 天失敗次數」這個欄位只有在「失敗」真的代表異常時才有意義——把可預期的略過或尚未公布記成 failed，會讓這個欄位永遠是雜訊，和 D-024 要解決的是同一類問題（正常路徑污染錯誤訊號）。
+- 替代方案：只有價格 job 記錄（狀態頁看不到個股清單與日曆，使用者最想確認的「今天清單有沒有更新」反而查不到）；由 `scheduler.py` 的 wrapper 負責記錄（CLI 手動執行就不會留紀錄，且回補腳本也要各記一次，實作會重複三份）。
+- 影響：`etl_job_log` 列數增加（每天約 4 列）；T1-5 `backfill_calendar` 直接呼叫 `rebuild_calendar_from_index` 即可，不要再包一層 `job_run`；T1-6 `/api/etl/summary` 會多出三個 `job_name` 的列。
+
+## D-026　時間相依的分支一律用可注入的 `now` 參數，不在分支裡直接呼叫 `datetime.now()`
+
+- 日期：2026-09-19（M1，T1-4 第 3 輪審查後補記）
+- 決策：任何以「現在」決定行為的分支（目前只有 `load_index_month` 的「當月一律視為未完成，不 skip」），函式要開一個關鍵字參數 `now: datetime | None = None`，內部一律 `ref = now or datetime.now(TAIPEI)`。測試必須注入固定時間覆蓋兩側分支，不得依賴跑測試當下的系統日期。CLI 與排程器不暴露這個參數。
+- 理由：T1-4 第 3 輪的測試 `test_load_index_month_skip_when_done` 用的年月是 `2026-09`，剛好是跑測試當下的當月，於是「已完成就 skip」這條路徑永遠走不到——測試名稱與實際涵蓋範圍不符，第 2 輪的 `UnboundLocalError` 才會躲過整輪測試，最後靠 Reviewer 手動塞紀錄才重現。同一份測試在 2026-10 之後又會改走另一條路徑，屬於會自己變色的測試。fixture 的日期是固定的（2026-09），系統時鐘卻會前進，兩者遲早分家。
+- 替代方案：測試 `monkeypatch` 掉模組層的 `datetime`（打到整個模組、容易誤傷其他用途，且錯誤訊息難懂）；用 `freezegun` 之類的套件（為一個分支多一個相依）；改用相對於 fixture 的日期常數（沒解決「當月」語意本身就依賴現在）。
+- 影響：只影響 `load_index_month` 與其測試；日後 M2 若有「盤中／盤後」判斷，沿用同一個慣例。

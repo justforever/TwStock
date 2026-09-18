@@ -72,7 +72,7 @@ def job_run(
                 .values(status="success", rows=run.rows, finished_at=text("now()"))
             )
     except JobSkipped as exc:
-        # 跳過：記錄跳過理由
+        # 跳過：記錄跳過理由，不往外拋
         run.note = str(exc)
         with engine.begin() as conn:
             conn.execute(

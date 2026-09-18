@@ -46,9 +46,12 @@ def test_job_run_failed(clean_db):
 
 def test_job_run_skipped(clean_db):
     """測試 job_run 跳過路徑。"""
-    # JobSkipped 不應該往外拋
+    # JobSkipped 被 job_run 內部攔下，不往外拋
     with job_run(clean_db, "daily_price_twse", target_date=date(2026, 9, 18)) as run:
         run.skip("非開市日")
+
+    # 驗證 run.note 被設定
+    assert run.note == "非開市日"
 
     # 驗證 DB
     with clean_db.begin() as conn:

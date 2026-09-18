@@ -196,8 +196,8 @@ def test_refresh_stock_list_deactivate_guard(clean_db):
     """測試停用時的筆數保護。"""
     html = _load_fixture("isin_twse_strmode2.html")
 
-    # 筆數少於 500，不應該停用
-    with pytest.raises(SourceFormatError, match="少於 500"):
+    # 筆數少於初次建庫下限，不應該停用
+    with pytest.raises(SourceFormatError, match="初次建庫下限"):
         refresh_stock_list(clean_db, "TWSE", html=html, deactivate=True)
 
     # 驗證沒有寫入 DB

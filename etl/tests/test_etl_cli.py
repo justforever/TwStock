@@ -150,6 +150,154 @@ def test_load_stocks_deactivate_guard(clean_db, monkeypatch, capsys):
     get_engine.cache_clear()
 
 
+def test_load_price_cli(clean_db, monkeypatch, capsys):
+    """測試 load-price CLI 指令。"""
+    # 設定資料庫環境變數
+    import os
+    database_url = os.environ.get("TWSTOCK_TEST_DATABASE_URL")
+    if database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        get_engine.cache_clear()
+
+    # 先載入個股清單
+    main(["load-stocks", "--market", "TWSE", "--file", _fixture_path("isin_twse_strmode2.html")])
+
+    # 執行 load-price
+    result = main([
+        "load-price",
+        "--market", "TWSE",
+        "--file", _fixture_path("TWSE_price_20260918.json"),
+        "--date", "2026-09-18",
+        "--no-calendar-check"
+    ])
+
+    assert result == 0
+    out, err = capsys.readouterr()
+    assert "rows=4" in out
+
+    get_engine.cache_clear()
+
+
+def test_load_index_cli(clean_db, monkeypatch, capsys):
+    """測試 load-index CLI 指令。"""
+    import os
+    database_url = os.environ.get("TWSTOCK_TEST_DATABASE_URL")
+    if database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        get_engine.cache_clear()
+
+    # 執行 load-index
+    result = main([
+        "load-index",
+        "--year", "2026",
+        "--month", "9",
+        "--file", _fixture_path("TAIEX_index_202609.json")
+    ])
+
+    assert result == 0
+    out, err = capsys.readouterr()
+    assert "rows=3" in out
+
+    get_engine.cache_clear()
+
+
+def test_load_index_cli_force(clean_db, monkeypatch, capsys):
+    """測試 load-index CLI 指令 force 參數。"""
+    import os
+    database_url = os.environ.get("TWSTOCK_TEST_DATABASE_URL")
+    if database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        get_engine.cache_clear()
+
+    # 第一次執行
+    result1 = main([
+        "load-index",
+        "--year", "2026",
+        "--month", "9",
+        "--file", _fixture_path("TAIEX_index_202609.json")
+    ])
+    assert result1 == 0
+    out1, err1 = capsys.readouterr()
+    assert "rows=3" in out1
+
+    # 第二次執行用 force
+    result2 = main([
+        "load-index",
+        "--year", "2026",
+        "--month", "9",
+        "--force",
+        "--file", _fixture_path("TAIEX_index_202609.json")
+    ])
+    assert result2 == 0
+    out2, err2 = capsys.readouterr()
+    assert "rows=3" in out2
+
+    get_engine.cache_clear()
+
+
+def test_load_exright_cli(clean_db, monkeypatch, capsys):
+    """測試 load-exright CLI 指令。"""
+    import os
+    database_url = os.environ.get("TWSTOCK_TEST_DATABASE_URL")
+    if database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        get_engine.cache_clear()
+
+    # 先載入個股清單
+    main(["load-stocks", "--market", "TWSE", "--file", _fixture_path("isin_twse_strmode2.html")])
+
+    # 執行 load-exright
+    result = main([
+        "load-exright",
+        "--from", "2026-09-01",
+        "--to", "2026-09-30",
+        "--file", _fixture_path("exright_20260901_20260930.json")
+    ])
+
+    assert result == 0
+    out, err = capsys.readouterr()
+    assert "rows=2" in out
+
+    get_engine.cache_clear()
+
+
+def test_load_exright_cli_skip(clean_db, monkeypatch, capsys):
+    """測試 load-exright CLI 指令 skip 情況。"""
+    import os
+    database_url = os.environ.get("TWSTOCK_TEST_DATABASE_URL")
+    if database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        get_engine.cache_clear()
+
+    # 先載入個股清單
+    main(["load-stocks", "--market", "TWSE", "--file", _fixture_path("isin_twse_strmode2.html")])
+
+    # 第一次執行
+    result1 = main([
+        "load-exright",
+        "--from", "2026-09-01",
+        "--to", "2026-09-30",
+        "--file", _fixture_path("exright_20260901_20260930.json")
+    ])
+    assert result1 == 0
+    out1, err1 = capsys.readouterr()
+    assert "rows=2" in out1
+
+    # 第二次執行應該 skip
+    result2 = main([
+        "load-exright",
+        "--from", "2026-09-01",
+        "--to", "2026-09-30",
+        "--file", _fixture_path("exright_20260901_20260930.json")
+    ])
+    assert result2 == 0
+    out2, err2 = capsys.readouterr()
+    assert "skipped" in out2
+    assert "已完成，略過" in out2
+
+    get_engine.cache_clear()
+
+
 def test_missing_database_url(monkeypatch, capsys):
     """測試未設定 DATABASE_URL。"""
     monkeypatch.delenv("DATABASE_URL", raising=False)

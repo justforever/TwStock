@@ -8,7 +8,13 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import Engine
 
-from twstock_etl.jobs import refresh_stock_list, refresh_trading_calendar
+from twstock_etl.jobs import (
+    load_adj_factors,
+    load_daily_price,
+    load_index_month,
+    refresh_calendar_with_next_year,
+    refresh_stock_list,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,27 +40,75 @@ def run_stock_list_job(engine: Engine) -> None:
             logger.exception("刷新 %s 個股清單失敗", market)
 
 
-def run_calendar_job(engine: Engine) -> None:
-    """刷新台北時間今年的交易日曆；失敗只記 log。
+def run_trading_calendar_job(engine: Engine) -> None:
+    """刷新台北時間今年與明年的交易日曆；失敗只記 log。
 
     Args:
         engine: SQLAlchemy Engine
     """
     try:
         year = datetime.now(TAIPEI).year
-        result = refresh_trading_calendar(engine, year)
-        logger.info(
-            "成功刷新 %d 年交易日曆：%d 天，開市 %d 天",
-            result.year,
-            result.days,
-            result.open_days,
-        )
+        results = refresh_calendar_with_next_year(engine, year)
+        logger.info("成功刷新 %d 個年份的交易日曆", len(results))
     except Exception:
         logger.exception("刷新交易日曆失敗")
 
 
+def run_daily_price_job(engine: Engine, market: str) -> None:
+    """載入單日日成交；失敗只記 log。
+
+    Args:
+        engine: SQLAlchemy Engine
+        market: 市場別
+    """
+    try:
+        today = datetime.now(TAIPEI).date()
+        result = load_daily_price(engine, market, today)
+        logger.info(
+            "成功載入 %s %s 日成交：%d 筆",
+            today,
+            market,
+            result.rows,
+        )
+    except Exception:
+        logger.exception("載入 %s 日成交失敗", market)
+
+
+def run_index_month_job(engine: Engine) -> None:
+    """載入當月 TAIEX 指數；失敗只記 log。
+
+    Args:
+        engine: SQLAlchemy Engine
+    """
+    try:
+        now = datetime.now(TAIPEI)
+        year, month = now.year, now.month
+        result = load_index_month(engine, year, month, force=True)
+        logger.info("成功載入 %04d-%02d TAIEX 指數：%d 筆", year, month, result.rows)
+    except Exception:
+        logger.exception("載入 TAIEX 指數失敗")
+
+
+def run_adj_factors_job(engine: Engine) -> None:
+    """載入最近 7 天的除權除息；失敗只記 log。
+
+    Args:
+        engine: SQLAlchemy Engine
+    """
+    try:
+        from datetime import timedelta
+
+        today = datetime.now(TAIPEI).date()
+        start = today - timedelta(days=7)
+        end = today
+        result = load_adj_factors(engine, start, end)
+        logger.info("成功載入 %s 至 %s 除權除息：%d 筆", start, end, result.rows)
+    except Exception:
+        logger.exception("載入除權除息失敗")
+
+
 def build_scheduler(engine: Engine) -> BlockingScheduler:
-    """建立（未啟動的）排程器並註冊 M0 的兩個 job。
+    """建立（未啟動的）排程器並註冊所有 job。
 
     Args:
         engine: SQLAlchemy Engine
@@ -64,7 +118,19 @@ def build_scheduler(engine: Engine) -> BlockingScheduler:
     """
     scheduler = BlockingScheduler(timezone=TAIPEI)
 
-    # 個股清單：每日 08:00 台北時間
+    # 交易日曆：每日 07:30 台北時間（啟動即跑一次）
+    scheduler.add_job(
+        run_trading_calendar_job,
+        trigger=CronTrigger(hour=7, minute=30, timezone=TAIPEI),
+        args=[engine],
+        id="refresh_trading_calendar",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+        next_run_time=datetime.now(TAIPEI),
+    )
+
+    # 個股清單：每日 08:00 台北時間（啟動即跑一次）
     scheduler.add_job(
         run_stock_list_job,
         trigger=CronTrigger(hour=8, minute=0, timezone=TAIPEI),
@@ -76,16 +142,48 @@ def build_scheduler(engine: Engine) -> BlockingScheduler:
         next_run_time=datetime.now(TAIPEI),
     )
 
-    # 交易日曆：每日 07:30 台北時間
+    # 日成交（上市）：每日 15:35、17:35、19:35 台北時間
     scheduler.add_job(
-        run_calendar_job,
-        trigger=CronTrigger(hour=7, minute=30, timezone=TAIPEI),
-        args=[engine],
-        id="refresh_trading_calendar",
+        run_daily_price_job,
+        trigger=CronTrigger(hour="15,17,19", minute=35, timezone=TAIPEI),
+        args=[engine, "TWSE"],
+        id="daily_price_twse",
         coalesce=True,
         max_instances=1,
         misfire_grace_time=3600,
-        next_run_time=datetime.now(TAIPEI),
+    )
+
+    # 日成交（上櫃）：每日 15:45、17:45、19:45 台北時間
+    scheduler.add_job(
+        run_daily_price_job,
+        trigger=CronTrigger(hour="15,17,19", minute=45, timezone=TAIPEI),
+        args=[engine, "TPEx"],
+        id="daily_price_tpex",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    # 指數日 K（當月）：每日 15:55、17:55、19:55 台北時間
+    scheduler.add_job(
+        run_index_month_job,
+        trigger=CronTrigger(hour="15,17,19", minute=55, timezone=TAIPEI),
+        args=[engine],
+        id="index_daily_taiex",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    # 除權除息：每日 16:10 台北時間
+    scheduler.add_job(
+        run_adj_factors_job,
+        trigger=CronTrigger(hour=16, minute=10, timezone=TAIPEI),
+        args=[engine],
+        id="adj_factor_twse",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
 
     return scheduler

@@ -119,3 +119,10 @@
 - 理由：migration 只跑一次且不與 API 多副本搶鎖；同源省去 CORS 設定與安全面。
 - 替代方案：API 啟動時自動 migrate（多副本會競爭、失敗時難排查）；前端直連 API + CORS。
 - 環境取捨：本開發環境 Docker Hub 被擋，無法 build / up；compose 只以 `docker compose -f deploy/docker-compose.yml --env-file .env.example config` 驗證語法，映像標籤（特別是 `timescale/timescaledb:2.21.3-pg16`）需使用者首次 pull 時確認存在，若不存在改用 Docker Hub 上最新的 `2.x-pg16` 標籤並回頭更新本決策。
+
+## D-015　U-1 真實來源格式驗證：`load-stocks` 對 TWSE／TPEx 實際跑通，parser 不用改
+
+- 日期：2026-09-18
+- 決策：本機起一個暫時的 `timescale/timescaledb:2.21.3-pg16` 容器（非 compose，單獨 `docker run`）+ Python 3.13 venv，連真實網路對 `https://isin.twse.com.tw/isin/C_public.jsp?strMode=2`（TWSE）與 `strMode=4`（TPEx）各跑一次 `python -m twstock_etl.cli load-stocks --market ...`（不帶 `--file`）。結果：TWSE 1294 筆（股票 1054＋ETF 240）、TPEx 1011 筆（股票 892＋ETF 119），皆在合理範圍（上市 1,000+、上櫃 800+），無 `SourceFormatError`，log 無「代號不符合格式」「無法拆分代號與名稱」等 warning。額外查表確認：`listed_date`／`isin_code` 無 NULL；`industry` 為 NULL 的筆數（359）恰等於 ETF 筆數（240+119），符合預期（ETF 本就無產業別）；抽查隨機列與唯一「名稱開頭是數字」的列（`6741 91APP*-KY`，真實公司名稱，非解析錯誤）皆正常。結論：`parse_isin_html` 與真實頁面格式一致，**不需要修改 parser 或補 fixture**；`etl/tests` 既有測試全數通過（無新增失敗）。
+- 理由：closes M0 report U-1（真實來源格式未驗證）；本機開發環境原先連不到 TWSE，現在連得到，補齊這條驗證路徑。
+- 影響範圍：無程式變動；`docs/reports/M0.md` U-1 與 README「尚未做的事」同步更新為已驗證。

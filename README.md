@@ -20,7 +20,7 @@
 | Docker Compose：`db` / `migrate` / `api` / `etl` / `web` 五個 service | 完成 |
 | 日 K 線、法人買賣超、集保分布、財報 | 尚未開始（M1 之後） |
 
-尚未做的事：`daily_price` 等時序表、真實來源連線驗證（開發環境連不到 TWSE/TPEx，見 [docs/reports/M0.md](docs/reports/M0.md)「未解問題」）。
+尚未做的事：`daily_price` 等時序表。個股清單（TWSE/TPEx ISIN）真實來源已驗證通過（見 [docs/reports/M0.md](docs/reports/M0.md)「未解問題」U-1）；TDCC/MOPS/FinMind 尚未驗證。
 
 ## 本機啟動方式（macOS，Docker）
 

@@ -93,6 +93,7 @@
 - 決策：來源 `https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule`（當年度）。`build_calendar(year, holidays)`：休市條目 → 休市；週末 → 休市（note「週末」）；其餘平日 → 開市。名稱或說明含「開始交易」「最後交易」的條目是**開市日**，不能當休市；「市場無交易，僅辦理結算交割作業」視為休市。資料不含目標年份時拋錯，不產生「全平日開市」的錯誤日曆。
 - 理由：官方公告最準；規則簡單可測。
 - 限制：OpenAPI 只給當年度。歷史年度日曆（5 年回補需要）延到 M1，屆時以 TWSE 網站報表端點查歷年休市日，或由大盤日 K 實際有交易的日期反推。
+- **年度涵蓋範圍已由 D-020 延伸**（2026-09-19，M1）：每日 job 改為刷新今年＋明年，歷史年度改由 TAIEX 指數交易日反推。`build_calendar` 本身的規則不變。
 - 替代方案：寫死假日表（每年要人工維護）；`holidays` 等第三方套件（沒有台股特有的封關/開紅盤與結算交割日）。
 
 ## D-012　個股下市處理：預設不停用，需明確開啟且有筆數保護
@@ -101,6 +102,7 @@
 - 決策：`upsert_stocks` 只新增/更新並把出現的個股設為 `is_active=true`；把「清單中消失」的個股設為 `is_active=false` 需呼叫端傳 `deactivate=True`（排程 job 會開，CLI 需 `--deactivate-missing`），且該市場解析筆數 < 500 時拒絕執行（在寫入前拋錯）。代號不刪除、不重用。
 - 理由：來源偶發回傳不完整頁面時，若自動停用會讓大量個股從搜尋消失；上市、上櫃實際各有數百到上千檔，500 是保守下限。
 - 替代方案：每次都同步停用（風險如上）；軟刪除到另一張歷程表（M0 不需要，plan 中「變更歷程表」留待有需求時做）。
+- **筆數保護部分已由 D-019 取代**（2026-09-19，M1）：絕對門檻 500 筆改為相對比例 70%。本決策的其餘內容（預設不停用、需明確傳 `deactivate=True`、代號不刪除不重用）仍然有效。
 
 ## D-013　搜尋實作：ILIKE + 臺/台正規化，不用 pg_trgm 與拼音
 
@@ -126,3 +128,94 @@
 - 決策：本機起一個暫時的 `timescale/timescaledb:2.21.3-pg16` 容器（非 compose，單獨 `docker run`）+ Python 3.13 venv，連真實網路對 `https://isin.twse.com.tw/isin/C_public.jsp?strMode=2`（TWSE）與 `strMode=4`（TPEx）各跑一次 `python -m twstock_etl.cli load-stocks --market ...`（不帶 `--file`）。結果：TWSE 1294 筆（股票 1054＋ETF 240）、TPEx 1011 筆（股票 892＋ETF 119），皆在合理範圍（上市 1,000+、上櫃 800+），無 `SourceFormatError`，log 無「代號不符合格式」「無法拆分代號與名稱」等 warning。額外查表確認：`listed_date`／`isin_code` 無 NULL；`industry` 為 NULL 的筆數（359）恰等於 ETF 筆數（240+119），符合預期（ETF 本就無產業別）；抽查隨機列與唯一「名稱開頭是數字」的列（`6741 91APP*-KY`，真實公司名稱，非解析錯誤）皆正常。結論：`parse_isin_html` 與真實頁面格式一致，**不需要修改 parser 或補 fixture**；`etl/tests` 既有測試全數通過（無新增失敗）。
 - 理由：closes M0 report U-1（真實來源格式未驗證）；本機開發環境原先連不到 TWSE，現在連得到，補齊這條驗證路徑。
 - 影響範圍：無程式變動；`docs/reports/M0.md` U-1 與 README「尚未做的事」同步更新為已驗證。
+
+## D-016　價格來源一律採「可帶日期的報表端點」，每日增量＝單日回補
+
+- 日期：2026-09-19（M1）
+- 決策：`daily_price` 的來源固定為兩個可指定日期的報表端點——上市 `https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date=YYYYMMDD&type=ALLBUT0999&response=json`、上櫃 `https://www.tpex.org.tw/www/zh-tw/afterTrading/otc?date=YYYY/MM/DD&type=EW&response=json`。每日盤後 job 就是「回補今天這一個日期」，與歷史回補走完全相同的程式路徑。上櫃端點另備舊版 `.../daily_close_quotes/stk_quote_result.php?l=zh-tw&d=RRR/MM/DD&o=json`，新版解析失敗時自動退回。
+- 理由：
+  - TWSE OpenAPI 的 `STOCK_DAY_ALL` 不含日期欄位，也無法查歷史，用它會讓「每日」與「回補」變成兩套 parser、兩組 fixture、兩種錯誤模式。
+  - 每日只打 2 次請求，報表端點的頻率限制不構成問題；而回補路徑天天被執行，格式一有變動當天就會被 `etl_job_log` 抓到，不必等到下次回補。
+  - 兩個端點回應都是 `{"stat","tables":[{"fields","data"}]}` 信封，可共用 `sources/report.py` 的 `extract_table`。
+- 替代方案：OpenAPI 做每日、報表端點做回補（兩套程式，如上）；FinMind `TaiwanStockPrice`（吃每小時配額，5 年全市場回補會卡在 402）。
+- 風險：上櫃端點是本專案目前最不確定的介面（TPEx 2024 年改版後網址與欄位名都換過）。對策＝舊版備援 + `extract_table` 以**欄位名**而非位置定位 + `--file` 可離線重跑。真實格式驗證見 `docs/specs/M1-price.md` §7 的 V-3。
+
+## D-017　`daily_price` 不設外鍵，改由 loader 以 `stock` 表過濾；無成交列不寫入
+
+- 日期：2026-09-19（M1）
+- 決策：`daily_price`、`adj_factor` 不建 `REFERENCES stock(stock_id)` 外鍵。loader 寫入前先讀 `stock` 全部代號，不在表內的直接丟掉並回報 `skipped_unknown`。另外「成交股數為 0 且收盤價為空或 0」的列在 parser 階段就跳過，不寫入資料庫。
+- 理由：
+  - `MI_INDEX?type=ALLBUT0999` 會回傳受益證券、ETN、特別股、TDR 等我們在 D-002 明確不收的證券；有外鍵會讓整批 INSERT 失敗，沒有外鍵但不過濾則會污染資料表。
+  - hypertable 上的外鍵在 TimescaleDB 有額外限制與效能成本，個人系統不值得。
+  - 無成交日寫一列全 NULL 的 K 棒，會讓前端與均線計算多一層特例；不寫入則 K 線自然跳過那天，與券商軟體行為一致。
+- 替代方案：加外鍵（整批失敗、hypertable 限制）；全部寫入不過濾（搜尋與排行會出現權證與 ETN）。
+- 影響：`skipped_unknown` 是重要訊號——如果某天它突然變很大，代表 `stock` 清單沒更新或來源格式變了，`etl_job_log` 與 ETL 狀態頁都看得到。
+
+## D-018　還原股價在 API 層即時計算，不存還原欄位
+
+- 日期：2026-09-19（M1）
+- 決策：`daily_price` 只存未還原的原始價。還原係數 `factor = 除權息參考價 ÷ 除權息前收盤價`（8 位小數）存在 `adj_factor(stock_id, ex_date)`。API `GET /api/stocks/{id}/prices?adj=true` 時，對每根 K 棒乘上「所有 `ex_date > trade_date` 的 factor 之乘積」（前復權：最新價格維持真實值，歷史價格往下調）。除權息**當天**那根不調整。成交股數、成交金額、成交筆數一律不調整。
+- 理由：
+  - 除權息資料常有事後更正；存還原價的話每更正一次就要重算整段歷史，存原始價則只要改一列 `adj_factor`。
+  - 一檔 5 年最多數十筆 factor，2,000 根 K 棒的乘法在 API 層是微秒等級，不需要預算。
+  - 「原始價」與「還原價」都能提供，使用者可以切換比對。
+- 替代方案：ETL 階段算好 `adj_close` 存欄位（更正成本高、切換不了原始價）；直接抓 FinMind 的還原股價（吃配額，且無法解釋差異來源）。
+- 取捨：M1 只有上市（TWSE `TWT49U`）的除權息，上櫃個股的還原 K 線在 M1 等同原始 K 線，M2 補上櫃來源。`cash_dividend` / `stock_dividend` 欄位在 M1 一律 NULL，等 M3 的股利資料。
+
+## D-019　hypertable 建立改為「先試 by_range 新簽名，失敗退回舊簽名」，並補 mock 測試
+
+- 日期：2026-09-19（M1）
+- 決策：`create_hypertable_if_available()` 改成先執行 TimescaleDB 2.13+ 的 `create_hypertable(rel, by_range(col, interval), …)`，在 SAVEPOINT（`conn.begin_nested()`）內執行；拋 `DBAPIError` 就記 warning 並改用 2.13 之前的 `create_hypertable(rel, col, chunk_time_interval => …)`。測試以 `MagicMock` 的 Connection 驗證兩條路徑各自送出的 SQL 與參數，另加一個「有 TimescaleDB 才跑、否則 skip」的實跑測試查 `timescaledb_information.hypertables`。
+- 理由：回應 M0 的 U-2。Compose 用的是 `timescale/timescaledb:2.21.3-pg16`，舊簽名在 2.13 起已標記 deprecated，未來大版本可能移除；而本開發環境沒有擴充、永遠測不到這段，所以至少要用 mock 把「送出的 SQL 長什麼樣」釘住。
+- 替代方案：只寫新簽名（使用者若用舊映像會整個 migration 失敗）；只寫舊簽名（未來會壞，且 M0 已記為未解問題）；用 `SELECT extversion FROM pg_extension` 判斷版本後分支（要解析版本字串，比 try/except 脆弱）。
+- 取捨：**「有 TimescaleDB 的環境」在本開發環境仍未實跑過**，只驗證了 SQL 文字與參數。實跑列在 `docs/specs/M1-price.md` §7 的 V-1，由使用者在 Mac 上 `docker compose up` 後確認。
+
+## D-020　個股停用保護改為相對比例門檻（取代 D-012 的絕對 500 筆）
+
+- 日期：2026-09-19（M1）
+- 決策：`refresh_stock_list(..., deactivate=True)` 在同一個交易內先查該市場目前 `is_active=true` 的筆數 `previous`：
+  - `previous > 0` 且本次解析筆數 `< previous × 0.7` → 拋 `SourceFormatError` 並中止（不寫入、不停用）。
+  - `previous == 0`（初次建庫）且本次 `< 50` 筆 → 同樣拋錯。
+  - `deactivate=False` 時完全不檢查（CLI 預設、fixture 載入不受影響）。
+  兩個門檻是模組常數 `DEACTIVATE_MIN_RATIO`、`DEACTIVATE_MIN_ABSOLUTE`，測試可 monkeypatch。
+- 理由：回應 M0 的 U-3。絕對門檻 500 對上櫃（約 800 檔）形同虛設——來源回 600 筆仍會通過，然後靜靜停用 200 檔。相對比例會跟著市場規模自動調整，而且「比昨天少三成」本來就是該人工確認的訊號。
+- 替代方案：提高絕對門檻（每次市場擴張都要改程式）；不擋、只警告（M0 已判定風險太高）；改成標記到歷程表而不改 `is_active`（要新表，留給有需求時）。
+- 影響：D-012 的「筆數保護」部分**已由本決策取代**；D-012 的其餘內容（預設不停用、代號不刪除不重用）仍然有效。失敗會寫進 `etl_job_log`（status=`failed`），ETL 狀態頁看得到。
+
+## D-021　交易日曆：每天刷新今年＋明年；歷史年度由 TAIEX 指數反推
+
+- 日期：2026-09-19（M1）
+- 決策：
+  - 每日 07:30 的 job 改為 `refresh_calendar_with_next_year(engine, 今年)`：同一份 payload 建今年與明年；明年資料官方尚未公布（`build_calendar` 拋 `SourceFormatError`）時記 INFO 略過，不算失敗。
+  - 歷史年度不再去找官方歷年休市日，改用 `rebuild_calendar_from_index(engine, year)`：`index_daily` 裡該年 TAIEX 有資料的日期即開市日，其餘為休市（note「未開市（由指數回補推得）」）。少於 200 天就拒絕執行。預設 `ON CONFLICT DO NOTHING`，不覆蓋官方來源寫入的 note。
+  - 因此回補順序固定為：先 `backfill.py index`，再 `backfill.py calendar`，最後 `backfill.py price`。
+- 理由：回應 M0 的 U-5。TWSE OpenAPI 只給當年度，跨年會出現「1 月的排程還在用去年日曆」的空窗；而歷史年度的休市日官方沒有現成 JSON，硬爬公告頁風險高。加權指數的歷史資料本來就要抓（`index_daily` 是 M1 交付項目），用它反推是零額外請求、零額外來源的做法，而且定義上完全正確——大盤有報價的日子就是有交易的日子。
+- 替代方案：爬 TWSE 歷年休市公告頁（又一個易變的 HTML 來源）；寫死假日表（每年人工維護）；由各股日 K 反推（要先有日 K，但日 K 回補又需要日曆，循環相依）。
+- 取捨：反推出來的歷史日曆沒有休市原因（只有「未開市（由指數回補推得）」），而且若指數回補不完整會產生錯誤的休市日——所以設了 200 天下限，並把 note 標示清楚，之後要修正可以用 `--overwrite` 重建。
+
+## D-022　ETL 重試機制＝「同一天排三次 + etl_job_log 去重」，不用退避重試迴圈
+
+- 日期：2026-09-19（M1）
+- 決策：每日價格 job 的 APScheduler trigger 設為 `CronTrigger(hour="15,17,19", minute=…)`；job 一開始先查 `has_successful_run(job_name, target_date)`，已成功或已跳過就記一筆 `skipped` 直接返回。`daily_price_twse` 這類 job_name **每日排程與歷史回補共用**，斷點續傳才有效。
+- 理由：plan 要求「失敗自動重試 3 次」。用排程重跑而不是在 job 內迴圈重試，有三個好處：(1) 間隔以小時計，真正避得開來源暫時性故障與盤後資料延遲公布；(2) 每次嘗試都是獨立的 `etl_job_log` 列，ETL 狀態頁看得到重試了幾次；(3) 容器重啟不會丟失重試狀態。`http.get_with_retry` 的短期退避重試（處理連線抖動）仍保留，兩者互補。
+- 替代方案：job 內 `for attempt in range(3): sleep(backoff)`（重試間隔太短、佔住 worker、log 不透明）；APScheduler 的 job store 持久化 + 失敗重排（多一層狀態，且我們已經有 `etl_job_log`）。
+- 影響：`etl_job_log` 同一個 `(job_name, target_date)` 會有多列，查詢一律用「存在任一 success/skipped」而不是「最後一列是 success」。
+
+## D-023　前端 K 線採 Lightweight Charts 4.2.3（v4 API），jsdom 測試以 vi.mock 取代真實繪圖
+
+- 日期：2026-09-19（M1）
+- 決策：`web/package.json` 鎖 `"lightweight-charts": "4.2.3"`，使用 v4 的 `chart.addCandlestickSeries()` / `addLineSeries()` / `addHistogramSeries()`。不採用 registry 上更新的 5.2.1（`chart.addSeries(CandlestickSeries, …)` 是全新 API）。所有會建立圖表的元件測試一律 `vi.mock('lightweight-charts')`，並在 `setupTests.ts` 補 `ResizeObserver` polyfill。
+- 理由：
+  - 沿用 D-007 的版本策略：Coder 是能力有限的模型，v4 的 `addXxxSeries` 寫法在文件與範例中流通最廣，v5 的 series 建構子寫法容易寫錯且錯誤訊息不直觀。
+  - Architect 已於本環境 `npm i lightweight-charts@4.2.3` 實測可安裝，並確認 `dist/typings.d.ts` 含三個 `addXxxSeries` 簽名。
+  - jsdom 沒有 canvas 尺寸，真的建立圖表會拋錯或畫出空白，測試價值為零；把圖表 mock 掉，測的是「資料有沒有正確流進 `setData`」與頁面互動，那才是會壞的地方。
+- 替代方案：ECharts（體積大、K 線互動不如專用套件，plan 也只把它留給籌碼／財報圖）；v5（如上）；在測試裡裝 `canvas` 套件（原生編譯依賴，CI 很脆）。
+- 後續：均線在前端計算（`web/src/ma.ts`），與 plan「技術指標不存 DB」一致。
+
+## D-024　M1 範圍邊界：指數只收 TAIEX、除權息只收上市、ETL 狀態頁唯讀
+
+- 日期：2026-09-19（M1）
+- 決策：M1 的 `index_daily` 只寫入 `index_id = 'TAIEX'`（來源 `MI_5MINS_HIST`，一次一個月）；`adj_factor` 只收上市（TWSE `TWT49U`）；`/admin/etl` 是唯讀狀態頁，沒有手動重跑按鈕；不做週 K／月 K、不做技術指標、不做十字線數值面板。
+- 理由：M1 的完成標準是「任一個股看得到正確還原 K 線，且排程每天自動更新」。櫃買指數與上櫃除權息各自需要再賭一個格式未知的端點，而它們對這個完成標準都不是必要條件；把它們留到 M2，可以和籌碼資料一起用同一批真實回應驗證。手動重跑需要寫入型 API 與權限考量（即使只在內網），M1 先不開。
+- 替代方案：M1 一次做滿（任務數與未驗證端點數同時翻倍，違反「每階段結束都是可用系統」的節奏）。
+- 影響：schema 已保留擴充空間——`index_daily` 主鍵含 `index_id`，`adj_factor` 有 `source` 欄位，兩者加來源都不必改結構。上櫃個股在 M1 勾選「還原價」時看到的就是原始 K 線，前端不必特別處理。

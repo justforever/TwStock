@@ -13,10 +13,14 @@ class TestTablesExist:
     """測試表是否存在。"""
 
     def test_tables_exist(self, db_engine):
-        """驗證 stock、trading_calendar、alembic_version 表存在。"""
+        """驗證 stock、trading_calendar、daily_price、index_daily、adj_factor、etl_job_log、alembic_version 表存在。"""
         table_names = inspect(db_engine).get_table_names()
         assert "stock" in table_names
         assert "trading_calendar" in table_names
+        assert "daily_price" in table_names
+        assert "index_daily" in table_names
+        assert "adj_factor" in table_names
+        assert "etl_job_log" in table_names
         assert "alembic_version" in table_names
 
 
@@ -66,6 +70,32 @@ class TestStockConstraints:
             assert result[2] is not None, "created_at 不應為 NULL"
 
 
+class TestPriceConstraints:
+    """測試 price 表約束。"""
+
+    def test_daily_price_source_check(self, clean_db):
+        """驗證 daily_price source CHECK 約束正常工作。"""
+        with clean_db.begin() as conn:
+            with pytest.raises(IntegrityError):
+                conn.execute(
+                    text(
+                        "INSERT INTO daily_price (stock_id, trade_date, source) VALUES (:stock_id, :trade_date, :source)"
+                    ),
+                    {"stock_id": "2330", "trade_date": "2026-09-18", "source": "XXX"}
+                )
+
+    def test_adj_factor_positive_check(self, clean_db):
+        """驗證 adj_factor factor > 0 CHECK 約束正常工作。"""
+        with clean_db.begin() as conn:
+            with pytest.raises(IntegrityError):
+                conn.execute(
+                    text(
+                        "INSERT INTO adj_factor (stock_id, ex_date, factor) VALUES (:stock_id, :ex_date, :factor)"
+                    ),
+                    {"stock_id": "2330", "ex_date": "2026-09-18", "factor": 0}
+                )
+
+
 class TestReversibility:
     """測試 migration 可逆性。"""
 
@@ -77,4 +107,8 @@ class TestReversibility:
         table_names = inspect(engine).get_table_names()
         assert "stock" in table_names
         assert "trading_calendar" in table_names
+        assert "daily_price" in table_names
+        assert "index_daily" in table_names
+        assert "adj_factor" in table_names
+        assert "etl_job_log" in table_names
         engine.dispose()

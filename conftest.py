@@ -36,5 +36,5 @@ def clean_db(db_engine: Engine) -> Engine:
     with db_engine.begin() as conn:
         table_names = [table.name for table in metadata.sorted_tables]
         if table_names:
-            conn.execute(text(f"TRUNCATE {', '.join(table_names)}"))
+            conn.execute(text(f"TRUNCATE {', '.join(table_names)} RESTART IDENTITY CASCADE"))
     return db_engine

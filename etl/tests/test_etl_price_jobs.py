@@ -1,13 +1,14 @@
 """ETL 價格工作函式測試。"""
 
 import json
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
 from sqlalchemy import Engine
 
 from twstock_etl.jobs import (
+    TAIPEI,
     load_adj_factors,
     load_daily_price,
     load_index_month,
@@ -143,22 +144,43 @@ def test_load_index_month(setup_db):
 
 
 def test_load_index_month_skip_when_done(setup_db):
-    """測試指數月份已完成時跳過。"""
+    """非當月且已完成時要 skip，且不拋例外（不依賴系統當前日期）。"""
     engine = setup_db
     fixture_path = Path("etl/tests/fixtures/TAIEX_index_202609.json")
 
     with open(fixture_path) as f:
         payload = json.load(f)
 
-    # 第一次正常執行（當月會自動執行，不 skip）
-    result1 = load_index_month(engine, 2026, 9, payload=payload)
-    assert result1.rows == 3
-    assert result1.skip_reason is None
+    # 第一次：用注入的「當月」時間，一定會實際執行
+    first = load_index_month(
+        engine, 2026, 9, payload=payload, now=datetime(2026, 9, 30, tzinfo=TAIPEI)
+    )
+    assert first.rows == 3
+    assert first.skip_reason is None
 
-    # 第二次應該也會執行（因為是當月，當月一律不 skip）
-    result2 = load_index_month(engine, 2026, 9, payload=payload)
-    assert result2.rows == 3
-    assert result2.skip_reason is None
+    # 第二次：注入非當月的時間 → 應該 skip，回傳 rows=0 而不是拋 UnboundLocalError
+    second = load_index_month(
+        engine, 2026, 9, payload=payload, now=datetime(2027, 1, 15, tzinfo=TAIPEI)
+    )
+    assert second.rows == 0
+    assert second.skip_reason == "已完成，略過"
+
+
+def test_load_index_month_current_month_not_skipped(setup_db):
+    """當月一律重跑，不 skip（不依賴系統當前日期）。"""
+    engine = setup_db
+    fixture_path = Path("etl/tests/fixtures/TAIEX_index_202609.json")
+
+    with open(fixture_path) as f:
+        payload = json.load(f)
+
+    ref = datetime(2026, 9, 30, tzinfo=TAIPEI)
+    first = load_index_month(engine, 2026, 9, payload=payload, now=ref)
+    assert first.rows == 3
+
+    second = load_index_month(engine, 2026, 9, payload=payload, now=ref)
+    assert second.rows == 3
+    assert second.skip_reason is None
 
 
 def test_load_index_month_force(setup_db):

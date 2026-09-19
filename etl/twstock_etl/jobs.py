@@ -344,7 +344,7 @@ def load_daily_price(
         force: 是否強制重抓
 
     Returns:
-        PriceJobResult
+        PriceJobResult；被略過時 rows=0、skipped_unknown=0、skip_reason 為略過原因
 
     Raises:
         ValueError: market 不是 TWSE / TPEx
@@ -353,6 +353,8 @@ def load_daily_price(
         raise ValueError(f"市場別錯誤：{market}")
 
     job_name = f"daily_price_{market.lower()}"
+    rows = 0
+    skipped_unknown = 0
 
     with job_run(engine, job_name, target_date=trade_date) as run:
         with engine.begin() as conn:
@@ -386,27 +388,17 @@ def load_daily_price(
         # 寫入
         with engine.begin() as conn:
             upsert_result = upsert_daily_prices(conn, records)
-            run.rows = upsert_result.written
+        rows = upsert_result.written
+        skipped_unknown = upsert_result.skipped_unknown
+        run.rows = rows
 
-    # 回傳結果：若被 skip，rows=0、skipped_unknown=0、skip_reason=<reason>
-    if run.note is not None:
-        # 被 skip：run.note 是 skip 原因
-        return PriceJobResult(
-            market=market,
-            trade_date=trade_date,
-            rows=0,
-            skipped_unknown=0,
-            skip_reason=run.note,
-        )
-    else:
-        # 成功：upsert_result 在區塊內被設定
-        return PriceJobResult(
-            market=market,
-            trade_date=trade_date,
-            rows=run.rows,
-            skipped_unknown=upsert_result.skipped_unknown,
-            skip_reason=None,
-        )
+    return PriceJobResult(
+        market=market,
+        trade_date=trade_date,
+        rows=rows,
+        skipped_unknown=skipped_unknown,
+        skip_reason=run.note,
+    )
 
 
 def load_index_month(
@@ -417,10 +409,11 @@ def load_index_month(
     payload: dict | None = None,
     client: httpx.Client | None = None,
     force: bool = False,
+    now: datetime | None = None,
 ) -> IndexJobResult:
     """抓某年某月的 TAIEX 指數歷史並寫入 index_daily，回傳結果。
 
-    當月（台北時間今天所在的月）一律視為未完成，不 skip。
+    當月（now 或台北時間今天所在的月）一律視為未完成，不 skip。
 
     Args:
         engine: SQLAlchemy Engine
@@ -429,17 +422,19 @@ def load_index_month(
         payload: 若提供則用此 JSON payload，否則下載
         client: httpx.Client；為 None 時建立新的
         force: 是否強制重抓
+        now: 判斷「當月」的基準時間；為 None 時用 datetime.now(TAIPEI)（見 D-026）
 
     Returns:
-        IndexJobResult
+        IndexJobResult；被略過時 rows=0、skip_reason 為略過原因
     """
     target_key = f"{year:04d}-{month:02d}"
     job_name = "index_daily_taiex"
+    rows = 0
 
     with job_run(engine, job_name, target_key=target_key) as run:
-        # 檢查是否為當月
-        now = datetime.now(TAIPEI)
-        is_current_month = now.year == year and now.month == month
+        # 檢查是否為當月（基準時間可注入，不直接在分支裡呼叫 datetime.now）
+        ref = now or datetime.now(TAIPEI)
+        is_current_month = ref.year == year and ref.month == month
 
         # 檢查是否已完成（當月一律跳過此檢查）
         with engine.begin() as conn:
@@ -460,25 +455,9 @@ def load_index_month(
         # 寫入
         with engine.begin() as conn:
             rows = upsert_index_daily(conn, records)
-            run.rows = rows
+        run.rows = rows
 
-    # 回傳結果：若被 skip，rows=0、skip_reason=<reason>
-    if run.note is not None:
-        # 被 skip：run.note 是 skip 原因
-        return IndexJobResult(
-            year=year,
-            month=month,
-            rows=0,
-            skip_reason=run.note,
-        )
-    else:
-        # 成功
-        return IndexJobResult(
-            year=year,
-            month=month,
-            rows=run.rows,
-            skip_reason=None,
-        )
+    return IndexJobResult(year=year, month=month, rows=rows, skip_reason=run.note)
 
 
 def load_adj_factors(
@@ -501,7 +480,7 @@ def load_adj_factors(
         force: 是否強制重抓
 
     Returns:
-        AdjFactorJobResult
+        AdjFactorJobResult；被略過時 rows=0、skip_reason 為略過原因
 
     Raises:
         ValueError: 區間長度超過 31 天
@@ -512,6 +491,7 @@ def load_adj_factors(
 
     target_key = f"{start:%Y%m%d}-{end:%Y%m%d}"
     job_name = "adj_factor_twse"
+    rows = 0
 
     with job_run(engine, job_name, target_key=target_key) as run:
         with engine.begin() as conn:
@@ -527,23 +507,8 @@ def load_adj_factors(
 
         # 寫入
         with engine.begin() as conn:
-            result = upsert_adj_factors(conn, records)
-            run.rows = result.written
+            upsert_result = upsert_adj_factors(conn, records)
+        rows = upsert_result.written
+        run.rows = rows
 
-    # 回傳結果：若被 skip，rows=0、skip_reason=<reason>
-    if run.note is not None:
-        # 被 skip：run.note 是 skip 原因
-        return AdjFactorJobResult(
-            start=start,
-            end=end,
-            rows=0,
-            skip_reason=run.note,
-        )
-    else:
-        # 成功
-        return AdjFactorJobResult(
-            start=start,
-            end=end,
-            rows=result.written,
-            skip_reason=None,
-        )
+    return AdjFactorJobResult(start=start, end=end, rows=rows, skip_reason=run.note)

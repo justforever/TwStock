@@ -3491,7 +3491,7 @@ cd /home/claude/TwStock && docker compose -f deploy/docker-compose.yml --env-fil
 | T1-2 | 來源 parser：日成交（上市／上櫃）、加權指數、除權除息 | T1-1（models 共用，可平行但順序照排） | DONE | `docs/reviews/T1-2.md` |
 | T1-3 | Loader：價格三表寫入、未知代號過濾、etl_job_log 紀錄 | T1-1、T1-2 | DONE | `docs/reviews/T1-3.md` |
 | T1-4 | Job、CLI、排程：每日盤後自動更新，並修掉 U-3 與 U-5 | T1-3 | SPLIT（拆成 T1-4a～T1-4d） | `docs/reviews/T1-4.md` |
-| T1-4a | `jobs.py`：三個價格 job 改單一 `return`，`load_index_month` 加 `now` 注入 | T1-4 | TODO | — |
+| T1-4a | `jobs.py`：三個價格 job 改單一 `return`，`load_index_month` 加 `now` 注入 | T1-4 | DONE | `docs/reviews/T1-4a.md` |
 | T1-4b | `cli.py`：`load-index`／`load-exright` 的 skip 輸出對齊 §4 表格 | T1-4a | TODO | — |
 | T1-4c | `scheduler.py`：`_log_job_outcome` helper 與四個 wrapper 的 log 測試 | T1-4a | TODO | — |
 | T1-4d | `jobs.py`：個股清單／交易日曆／指數反推日曆補 `etl_job_log` | T1-4c | TODO | — |

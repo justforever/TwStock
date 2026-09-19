@@ -301,7 +301,10 @@ def _cmd_load_index(args: argparse.Namespace) -> int:
     )
 
     if result.skip_reason is not None:
-        print(f"skipped month={year:04d}-{month:02d} reason={result.skip_reason}")
+        print(
+            f"skipped index=TAIEX month={year:04d}-{month:02d} "
+            f"reason={result.skip_reason}"
+        )
     else:
         print(f"loaded index=TAIEX month={year:04d}-{month:02d} rows={result.rows}")
 
@@ -328,7 +331,7 @@ def _cmd_load_exright(args: argparse.Namespace) -> int:
     result = load_adj_factors(engine, start, end, payload=payload, force=args.force)
 
     if result.skip_reason is not None:
-        print(f"skipped from={start} to={end} reason={result.skip_reason}")
+        print(f"skipped exright from={start} to={end} reason={result.skip_reason}")
     else:
         print(f"loaded exright from={start} to={end} rows={result.rows}")
 

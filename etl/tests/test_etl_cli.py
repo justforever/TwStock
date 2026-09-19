@@ -235,6 +235,41 @@ def test_load_index_cli_force(clean_db, monkeypatch, capsys):
     get_engine.cache_clear()
 
 
+def test_load_index_cli_skip(clean_db, monkeypatch, capsys):
+    """測試 load-index CLI 被 skip 時的輸出格式。"""
+    import os
+    from twstock_db.tables import etl_job_log
+
+    database_url = os.environ.get("TWSTOCK_TEST_DATABASE_URL")
+    if database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        get_engine.cache_clear()
+
+    # 先塞一筆「2000-01 已成功」的紀錄（遠古月份，不會是當月）
+    with clean_db.begin() as conn:
+        conn.execute(
+            etl_job_log.insert().values(
+                job_name="index_daily_taiex",
+                target_key="2000-01",
+                status="success",
+                rows=0,
+            )
+        )
+
+    result = main([
+        "load-index",
+        "--year", "2000",
+        "--month", "1",
+        "--file", _fixture_path("TAIEX_index_202609.json"),
+    ])
+
+    assert result == 0
+    out, err = capsys.readouterr()
+    assert "skipped index=TAIEX month=2000-01 reason=已完成，略過" in out
+
+    get_engine.cache_clear()
+
+
 def test_load_exright_cli(clean_db, monkeypatch, capsys):
     """測試 load-exright CLI 指令。"""
     import os
@@ -292,8 +327,9 @@ def test_load_exright_cli_skip(clean_db, monkeypatch, capsys):
     ])
     assert result2 == 0
     out2, err2 = capsys.readouterr()
-    assert "skipped" in out2
-    assert "已完成，略過" in out2
+    assert (
+        "skipped exright from=2026-09-01 to=2026-09-30 reason=已完成，略過" in out2
+    )
 
     get_engine.cache_clear()
 

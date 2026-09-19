@@ -1068,7 +1068,13 @@ cd /home/claude/TwStock && TWSTOCK_TEST_DATABASE_URL=$(scripts/pg_temp.sh start)
 
 ---
 
-## T1-4　Job、CLI、排程：每日盤後自動更新，並修掉 U-3 與 U-5
+## T1-4　Job、CLI、排程：每日盤後自動更新，並修掉 U-3 與 U-5（SPLIT）
+
+> **狀態：SPLIT（2026-09-19，第 4 輪 REQUEST_CHANGES 之後）。**
+> 本節保留為「T1-4 的完整設計與契約」，供查閱；**剩下未完成的工作已拆成 T1-4a、T1-4b、T1-4c、T1-4d 四個子任務**（見本文件下方四個獨立小節），
+> 請依序執行，一次只做一個子任務。已經做完並通過前四輪審查的部分不要重做。
+> 前四輪 REQUEST_CHANGES 的共同原因是「一次要求改太多處，每輪只改了其中一部分」，
+> 所以四個子任務各自**只動 1～2 個檔案**、彼此不重疊，驗收指令也各自獨立。
 
 ### 目標
 
@@ -1383,6 +1389,8 @@ def load_adj_factors(
 
 ### 6. 測試
 
+> 本小節是 T1-4 原始範圍的測試清單，供查閱。**實際要補的測試以 T1-4a～T1-4d 各子任務小節為準**，兩邊有出入時以子任務小節為準。
+
 `test_etl_price_jobs.py`（需要 DB）：
 - 先插 `stock`（1101、2317、2330、2834、0050）與 `trading_calendar`（2026-09-18 開市、2026-09-19 休市）。
 - `load_daily_price(engine, "TWSE", date(2026,9,18), payload=fixture)` → `result.rows == 4`（2882 不在 stock 表，2834 無成交）。
@@ -1542,7 +1550,1036 @@ cd /home/claude/TwStock && /usr/lib/postgresql/16/bin/psql "${DATABASE_URL/postg
 - 不准改 `sources/`、`loaders/price.py` 的解析邏輯。
 - 回報 `changed_files` 要與 `git status` 一致（第 1 輪的回報漏了 7 個檔案）。
 
-修完後本文件底部狀態表的 T1-4 維持 `IN_REVIEW`，等第 4 輪審查。
+> **上面這份「修正指引」第 1～5 項已於 2026-09-19 第 4 輪之後全數改寫成 T1-4a～T1-4d 四個子任務**（第 1 項 → T1-4c、第 2 項 → T1-4d、第 3 項 → T1-4a、第 4 項 → T1-4b、第 5 項 → 分散在四個子任務內）。
+> 請不要再照這份指引一次做完，改看下方四個子任務小節，一次做一個、一個一個驗收。
+> 第 6 項「仍然不准做的事」**繼續適用於每一個子任務**。
+
+---
+
+## T1-4a　`jobs.py`：三個價格 job 改成單一 `return`，`load_index_month` 加 `now` 注入
+
+依賴：T1-4（BLOCKED，已拆分）。這是 T1-4 拆分後的第 1 個子任務，先做這個。
+
+### 範圍（只准動這兩個檔案）
+
+| 路徑 | 動作 |
+| --- | --- |
+| `etl/twstock_etl/jobs.py` | 修改，**只准動 `load_daily_price`、`load_index_month`、`load_adj_factors` 這三個函式的函式本體** |
+| `etl/tests/test_etl_price_jobs.py` | 修改：改寫 1 個既有測試、新增 1 個測試、補 2 行 import |
+
+`jobs.py` 裡的 `refresh_stock_list`、`refresh_trading_calendar`、`refresh_calendar_with_next_year`、
+`rebuild_calendar_from_index`、`is_trading_day` 與檔案頂部的 import **這個子任務一律不准動**（留給 T1-4d）。
+`cli.py`、`scheduler.py`、`loaders/`、`sources/` 也不准動（各有自己的子任務）。
+
+### 1. `load_daily_price`：整個函式換成下面這段
+
+現況（`etl/twstock_etl/jobs.py`）結尾是 `if run.note is not None: return PriceJobResult(...) else: return PriceJobResult(...)`，
+依 §3 共同契約第 3 點改成「變數先給預設值、結尾只有一個 `return`」。把 `def load_daily_price(` 到該函式最後一行
+整段換成：
+
+```python
+def load_daily_price(
+    engine: Engine,
+    market: str,
+    trade_date: date,
+    *,
+    payload: dict | None = None,
+    client: httpx.Client | None = None,
+    check_calendar: bool = True,
+    force: bool = False,
+) -> PriceJobResult:
+    """抓（或用傳入的）單一交易日行情並寫入 daily_price，全程記 etl_job_log。
+
+    Args:
+        engine: SQLAlchemy Engine
+        market: 市場別（TWSE、TPEx）
+        trade_date: 交易日
+        payload: 若提供則用此 JSON payload，否則下載
+        client: httpx.Client；為 None 時建立新的
+        check_calendar: 是否檢查交易日曆
+        force: 是否強制重抓
+
+    Returns:
+        PriceJobResult；被略過時 rows=0、skipped_unknown=0、skip_reason 為略過原因
+
+    Raises:
+        ValueError: market 不是 TWSE / TPEx
+    """
+    if market not in ("TWSE", "TPEx"):
+        raise ValueError(f"市場別錯誤：{market}")
+
+    job_name = f"daily_price_{market.lower()}"
+    rows = 0
+    skipped_unknown = 0
+
+    with job_run(engine, job_name, target_date=trade_date) as run:
+        with engine.begin() as conn:
+            # 檢查是否已完成
+            if not force and has_successful_run(
+                conn, job_name, target_date=trade_date
+            ):
+                run.skip("已完成，略過")
+
+            # 檢查交易日曆
+            if check_calendar:
+                is_open = is_trading_day(conn, trade_date)
+                if is_open is False:
+                    run.skip("非開市日")
+                elif is_open is None:
+                    logger.warning("日曆缺少 %s", trade_date)
+
+        # 抓或讀取資料
+        if payload is None:
+            if market == "TWSE":
+                payload = fetch_twse_daily(trade_date, client)
+            else:
+                payload = fetch_tpex_daily(trade_date, client)
+
+        # 解析
+        if market == "TWSE":
+            records = parse_twse_daily(payload, trade_date)
+        else:
+            records = parse_tpex_daily(payload, trade_date)
+
+        # 寫入
+        with engine.begin() as conn:
+            upsert_result = upsert_daily_prices(conn, records)
+        rows = upsert_result.written
+        skipped_unknown = upsert_result.skipped_unknown
+        run.rows = rows
+
+    return PriceJobResult(
+        market=market,
+        trade_date=trade_date,
+        rows=rows,
+        skipped_unknown=skipped_unknown,
+        skip_reason=run.note,
+    )
+```
+
+### 2. `load_index_month`：整個函式換成下面這段（新增 `now` 參數）
+
+```python
+def load_index_month(
+    engine: Engine,
+    year: int,
+    month: int,
+    *,
+    payload: dict | None = None,
+    client: httpx.Client | None = None,
+    force: bool = False,
+    now: datetime | None = None,
+) -> IndexJobResult:
+    """抓某年某月的 TAIEX 指數歷史並寫入 index_daily，回傳結果。
+
+    當月（now 或台北時間今天所在的月）一律視為未完成，不 skip。
+
+    Args:
+        engine: SQLAlchemy Engine
+        year: 年份
+        month: 月份
+        payload: 若提供則用此 JSON payload，否則下載
+        client: httpx.Client；為 None 時建立新的
+        force: 是否強制重抓
+        now: 判斷「當月」的基準時間；為 None 時用 datetime.now(TAIPEI)（見 D-026）
+
+    Returns:
+        IndexJobResult；被略過時 rows=0、skip_reason 為略過原因
+    """
+    target_key = f"{year:04d}-{month:02d}"
+    job_name = "index_daily_taiex"
+    rows = 0
+
+    with job_run(engine, job_name, target_key=target_key) as run:
+        # 檢查是否為當月（基準時間可注入，不直接在分支裡呼叫 datetime.now）
+        ref = now or datetime.now(TAIPEI)
+        is_current_month = ref.year == year and ref.month == month
+
+        # 檢查是否已完成（當月一律跳過此檢查）
+        with engine.begin() as conn:
+            if (
+                not force
+                and not is_current_month
+                and has_successful_run(conn, job_name, target_key=target_key)
+            ):
+                run.skip("已完成，略過")
+
+        # 抓或讀取資料
+        if payload is None:
+            payload = fetch_taiex_month(year, month, client)
+
+        # 解析
+        records = parse_taiex_month(payload, year, month)
+
+        # 寫入
+        with engine.begin() as conn:
+            rows = upsert_index_daily(conn, records)
+        run.rows = rows
+
+    return IndexJobResult(year=year, month=month, rows=rows, skip_reason=run.note)
+```
+
+### 3. `load_adj_factors`：整個函式換成下面這段
+
+```python
+def load_adj_factors(
+    engine: Engine,
+    start: date,
+    end: date,
+    *,
+    payload: dict | None = None,
+    client: httpx.Client | None = None,
+    force: bool = False,
+) -> AdjFactorJobResult:
+    """抓某區間的除權除息計算結果並寫入 adj_factor，回傳結果。
+
+    Args:
+        engine: SQLAlchemy Engine
+        start: 起始日期（含）
+        end: 結束日期（含）
+        payload: 若提供則用此 JSON payload，否則下載
+        client: httpx.Client；為 None 時建立新的
+        force: 是否強制重抓
+
+    Returns:
+        AdjFactorJobResult；被略過時 rows=0、skip_reason 為略過原因
+
+    Raises:
+        ValueError: 區間長度超過 31 天
+    """
+    delta = (end - start).days
+    if delta > 31:
+        raise ValueError("區間長度不可超過 31 天（官方端點限制）")
+
+    target_key = f"{start:%Y%m%d}-{end:%Y%m%d}"
+    job_name = "adj_factor_twse"
+    rows = 0
+
+    with job_run(engine, job_name, target_key=target_key) as run:
+        with engine.begin() as conn:
+            if not force and has_successful_run(conn, job_name, target_key=target_key):
+                run.skip("已完成，略過")
+
+        # 抓或讀取資料
+        if payload is None:
+            payload = fetch_exright(start, end, client)
+
+        # 解析
+        records = parse_exright(payload)
+
+        # 寫入
+        with engine.begin() as conn:
+            upsert_result = upsert_adj_factors(conn, records)
+        rows = upsert_result.written
+        run.rows = rows
+
+    return AdjFactorJobResult(start=start, end=end, rows=rows, skip_reason=run.note)
+```
+
+三個函式改完後，`jobs.py` 全檔**不准**再出現 `if run.note is not None`。
+
+### 4. 測試（`etl/tests/test_etl_price_jobs.py`）
+
+**4.1 補 import。** 把第 4 行 `from datetime import date` 改成 `from datetime import date, datetime`，
+並在 `from twstock_etl.jobs import (` 的名單裡加入 `TAIPEI`（名單改成
+`TAIPEI, load_adj_factors, load_daily_price, load_index_month, rebuild_calendar_from_index`）。
+
+**4.2 改寫既有的 `test_load_index_month_skip_when_done`**（目前用「跑測試當下的當月」，永遠走不到 skip 分支，
+名不副實）。整個函式換成：
+
+```python
+def test_load_index_month_skip_when_done(setup_db):
+    """非當月且已完成時要 skip，且不拋例外（不依賴系統當前日期）。"""
+    engine = setup_db
+    fixture_path = Path("etl/tests/fixtures/TAIEX_index_202609.json")
+
+    with open(fixture_path) as f:
+        payload = json.load(f)
+
+    # 第一次：用注入的「當月」時間，一定會實際執行
+    first = load_index_month(
+        engine, 2026, 9, payload=payload, now=datetime(2026, 9, 30, tzinfo=TAIPEI)
+    )
+    assert first.rows == 3
+    assert first.skip_reason is None
+
+    # 第二次：注入非當月的時間 → 應該 skip，回傳 rows=0 而不是拋 UnboundLocalError
+    second = load_index_month(
+        engine, 2026, 9, payload=payload, now=datetime(2027, 1, 15, tzinfo=TAIPEI)
+    )
+    assert second.rows == 0
+    assert second.skip_reason == "已完成，略過"
+```
+
+**4.3 新增測試 `test_load_index_month_current_month_not_skipped`**，放在
+`test_load_index_month_skip_when_done` 後面：
+
+```python
+def test_load_index_month_current_month_not_skipped(setup_db):
+    """當月一律重跑，不 skip（不依賴系統當前日期）。"""
+    engine = setup_db
+    fixture_path = Path("etl/tests/fixtures/TAIEX_index_202609.json")
+
+    with open(fixture_path) as f:
+        payload = json.load(f)
+
+    ref = datetime(2026, 9, 30, tzinfo=TAIPEI)
+    first = load_index_month(engine, 2026, 9, payload=payload, now=ref)
+    assert first.rows == 3
+
+    second = load_index_month(engine, 2026, 9, payload=payload, now=ref)
+    assert second.rows == 3
+    assert second.skip_reason is None
+```
+
+其餘測試不准動。
+
+### 驗收指令
+
+```bash
+cd /home/claude/TwStock && TWSTOCK_TEST_DATABASE_URL=$(scripts/pg_temp.sh start) \
+  .venv/bin/python -m pytest etl/tests/test_etl_price_jobs.py -q
+# 預期：輸出含 "14 passed"（13 個既有 + 本子任務新增 1 個），0 failed
+
+cd /home/claude/TwStock && grep -c "if run.note is not None" etl/twstock_etl/jobs.py
+# 預期：0
+
+cd /home/claude/TwStock && TWSTOCK_TEST_DATABASE_URL=$(scripts/pg_temp.sh start) \
+  .venv/bin/python -m pytest -rs -q
+# 預期：全部 passed、0 failed；skipped 只有「此 PostgreSQL 未安裝 TimescaleDB…」那一筆
+```
+
+### 不要做的事
+
+- 不准動 `jobs.py` 的其他函式、頂部 import、三個 dataclass 定義（它們已經正確）。
+- 不准動 `cli.py`、`scheduler.py`、`loaders/job_log.py`、`sources/`。
+- 不准寫 `except JobSkipped`。
+
+---
+
+## T1-4b　`cli.py`：`load-index`／`load-exright` 的 skip 輸出對齊 §4 表格
+
+依賴：T1-4a。
+
+### 範圍（只准動這兩個檔案）
+
+| 路徑 | 動作 |
+| --- | --- |
+| `etl/twstock_etl/cli.py` | 修改：**只動 `_cmd_load_index` 與 `_cmd_load_exright` 各一行 `print`** |
+| `etl/tests/test_etl_cli.py` | 修改：改寫 1 個既有測試的斷言、新增 1 個測試 |
+
+### 1. `_cmd_load_index`（`etl/twstock_etl/cli.py`）
+
+把這一行：
+
+```python
+        print(f"skipped month={year:04d}-{month:02d} reason={result.skip_reason}")
+```
+
+改成：
+
+```python
+        print(
+            f"skipped index=TAIEX month={year:04d}-{month:02d} "
+            f"reason={result.skip_reason}"
+        )
+```
+
+### 2. `_cmd_load_exright`（`etl/twstock_etl/cli.py`）
+
+把這一行：
+
+```python
+        print(f"skipped from={start} to={end} reason={result.skip_reason}")
+```
+
+改成：
+
+```python
+        print(f"skipped exright from={start} to={end} reason={result.skip_reason}")
+```
+
+`cli.py` 其餘部分（argparse、`_cmd_load_price`、錯誤處理）一律不准動。
+
+### 3. 測試（`etl/tests/test_etl_cli.py`）
+
+**3.1 改寫 `test_load_exright_cli_skip` 的最後兩行斷言**（規格要求斷言整行，不要只斷言
+`"skipped" in out`）。把：
+
+```python
+    assert "skipped" in out2
+    assert "已完成，略過" in out2
+```
+
+換成：
+
+```python
+    assert (
+        "skipped exright from=2026-09-01 to=2026-09-30 reason=已完成，略過" in out2
+    )
+```
+
+**3.2 新增測試 `test_load_index_cli_skip`**，放在 `test_load_index_cli_force` 之後。
+`load-index` 的 skip 只有「非當月 + 已成功過」才會發生，而 CLI 沒有 `now` 注入，
+所以先直接往 `etl_job_log` 塞一筆遠古月份的成功紀錄，再跑 CLI：
+
+```python
+def test_load_index_cli_skip(clean_db, monkeypatch, capsys):
+    """測試 load-index CLI 被 skip 時的輸出格式。"""
+    import os
+    from twstock_db.tables import etl_job_log
+
+    database_url = os.environ.get("TWSTOCK_TEST_DATABASE_URL")
+    if database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        get_engine.cache_clear()
+
+    # 先塞一筆「2000-01 已成功」的紀錄（遠古月份，不會是當月）
+    with clean_db.begin() as conn:
+        conn.execute(
+            etl_job_log.insert().values(
+                job_name="index_daily_taiex",
+                target_key="2000-01",
+                status="success",
+                rows=0,
+            )
+        )
+
+    result = main([
+        "load-index",
+        "--year", "2000",
+        "--month", "1",
+        "--file", _fixture_path("TAIEX_index_202609.json"),
+    ])
+
+    assert result == 0
+    out, err = capsys.readouterr()
+    assert "skipped index=TAIEX month=2000-01 reason=已完成，略過" in out
+
+    get_engine.cache_clear()
+```
+
+（此測試會在 `parse_taiex_month` 之前就 skip，所以 fixture 的年月不符不影響。）
+
+其餘測試不准動。
+
+### 驗收指令
+
+```bash
+cd /home/claude/TwStock && TWSTOCK_TEST_DATABASE_URL=$(scripts/pg_temp.sh start) \
+  .venv/bin/python -m pytest etl/tests/test_etl_cli.py -q
+# 預期：輸出含 "13 passed"（12 個既有 + 本子任務新增 1 個），0 failed
+
+cd /home/claude/TwStock && export DATABASE_URL=$(scripts/pg_temp.sh reset) && \
+  .venv/bin/alembic -c db/alembic.ini upgrade head >/dev/null && \
+  .venv/bin/python -m twstock_etl.cli load-stocks --market TWSE --file etl/tests/fixtures/isin_twse_strmode2.html >/dev/null && \
+  .venv/bin/python -m twstock_etl.cli load-exright --from 2026-09-01 --to 2026-09-30 --file etl/tests/fixtures/exright_20260901_20260930.json && \
+  .venv/bin/python -m twstock_etl.cli load-exright --from 2026-09-01 --to 2026-09-30 --file etl/tests/fixtures/exright_20260901_20260930.json
+# 預期（兩行，exit 0）：
+# loaded exright from=2026-09-01 to=2026-09-30 rows=2
+# skipped exright from=2026-09-01 to=2026-09-30 reason=已完成，略過
+
+cd /home/claude/TwStock && TWSTOCK_TEST_DATABASE_URL=$(scripts/pg_temp.sh start) \
+  .venv/bin/python -m pytest -rs -q
+# 預期：全部 passed、0 failed
+```
+
+### 不要做的事
+
+- 不准動 `jobs.py`、`scheduler.py`。
+- 不准寫 `except JobSkipped`。
+- 不准改 `_cmd_load_price` 的輸出（它已經對齊規格）。
+
+---
+
+## T1-4c　`scheduler.py`：`_log_job_outcome` helper 與四個 wrapper 的 log 測試
+
+依賴：T1-4a。
+
+### 範圍（只准動這兩個檔案）
+
+| 路徑 | 動作 |
+| --- | --- |
+| `etl/twstock_etl/scheduler.py` | 修改：頂層 import 加 `timedelta`、新增 `_log_job_outcome`、改寫 `run_daily_price_job`／`run_index_month_job`／`run_adj_factors_job` |
+| `etl/tests/test_etl_scheduler.py` | 修改：改寫 2 個既有測試的斷言、新增 3 個測試 |
+
+`run_stock_list_job` 與 `run_trading_calendar_job` 的函式本體、`build_scheduler` 一律不准動
+（cron 時間、`timezone`、`coalesce`／`max_instances`／`misfire_grace_time`、`next_run_time` 都已通過審查）。
+
+### 1. 頂層 import（`etl/twstock_etl/scheduler.py`）
+
+把第 4 行：
+
+```python
+from datetime import datetime
+```
+
+改成：
+
+```python
+from datetime import datetime, timedelta
+```
+
+### 2. 新增模組私有 helper
+
+在 `TAIPEI = ZoneInfo("Asia/Taipei")` 之後、`def run_stock_list_job` 之前插入：
+
+```python
+def _log_job_outcome(what: str, result) -> None:
+    """統一記錄 job 結果：被略過記「略過」，實際執行記筆數。
+
+    result 需有 rows: int 與 skip_reason: str | None（見規格 §3 共同契約、D-024）。
+
+    Args:
+        what: 這次 job 的描述，例如「2026-09-18 TWSE 日成交」
+        result: PriceJobResult / IndexJobResult / AdjFactorJobResult
+    """
+    if result.skip_reason is not None:
+        logger.info("%s 略過：%s", what, result.skip_reason)
+    else:
+        logger.info("%s 成功載入 %d 筆", what, result.rows)
+```
+
+### 3. `run_daily_price_job`：整個函式換成下面這段
+
+```python
+def run_daily_price_job(engine: Engine, market: str) -> None:
+    """載入單日日成交；失敗只記 log。
+
+    Args:
+        engine: SQLAlchemy Engine
+        market: 市場別
+    """
+    try:
+        today = datetime.now(TAIPEI).date()
+        _log_job_outcome(
+            f"{today} {market} 日成交",
+            load_daily_price(engine, market, today),
+        )
+    except Exception:
+        logger.exception("載入 %s 日成交失敗", market)
+```
+
+### 4. `run_index_month_job`：整個函式換成下面這段
+
+```python
+def run_index_month_job(engine: Engine) -> None:
+    """載入當月 TAIEX 指數；失敗只記 log。
+
+    Args:
+        engine: SQLAlchemy Engine
+    """
+    try:
+        now = datetime.now(TAIPEI)
+        year, month = now.year, now.month
+        _log_job_outcome(
+            f"{year:04d}-{month:02d} TAIEX 指數",
+            load_index_month(engine, year, month, force=True),
+        )
+    except Exception:
+        logger.exception("載入 TAIEX 指數失敗")
+```
+
+### 5. `run_adj_factors_job`：整個函式換成下面這段（刪掉函式內的區域 import）
+
+```python
+def run_adj_factors_job(engine: Engine) -> None:
+    """載入最近 7 天的除權除息；失敗只記 log。
+
+    Args:
+        engine: SQLAlchemy Engine
+    """
+    try:
+        today = datetime.now(TAIPEI).date()
+        start = today - timedelta(days=7)
+        end = today
+        _log_job_outcome(
+            f"{start} 至 {end} 除權除息",
+            load_adj_factors(engine, start, end),
+        )
+    except Exception:
+        logger.exception("載入除權除息失敗")
+```
+
+改完後 `scheduler.py` 全檔**不准**再出現函式內的 `from datetime import`。
+
+### 6. 測試（`etl/tests/test_etl_scheduler.py`）
+
+這幾個測試一律用 `monkeypatch` 換掉 `twstock_etl.scheduler` 內被呼叫的 job 函式，
+回傳現成的 dataclass，**不需要 DB、不打網路**，斷言也不依賴系統當前日期
+（訊息前綴含日期的部分不要放進斷言字串）。
+
+**6.1 改既有 `test_run_index_month_job_success` 的斷言。** 把：
+
+```python
+    assert "成功載入 2026-09 TAIEX 指數：3 筆" in caplog.text
+```
+
+換成：
+
+```python
+    assert "TAIEX 指數 成功載入 3 筆" in caplog.text
+```
+
+同時在該測試結尾補一行 `assert "Traceback" not in caplog.text`。
+
+**6.2 改既有 `test_run_adj_factors_job_success` 的斷言。** 把：
+
+```python
+    assert "除權除息：2 筆" in caplog.text
+```
+
+換成：
+
+```python
+    assert "除權除息 成功載入 2 筆" in caplog.text
+```
+
+同時在該測試結尾補一行 `assert "Traceback" not in caplog.text`。
+
+**6.3 新增 `test_run_daily_price_job_success`**（放在 `test_run_stock_list_job_error_handling` 之後）：
+
+```python
+def test_run_daily_price_job_success(monkeypatch, caplog):
+    """測試日成交 wrapper 成功路徑的 log 輸出。"""
+    import logging
+    from datetime import date
+
+    from twstock_etl.jobs import PriceJobResult
+    from twstock_etl.scheduler import run_daily_price_job
+
+    def fake_load(engine, market, trade_date, **kwargs):
+        return PriceJobResult(
+            market=market,
+            trade_date=date(2026, 9, 18),
+            rows=4,
+            skipped_unknown=1,
+            skip_reason=None,
+        )
+
+    monkeypatch.setattr("twstock_etl.scheduler.load_daily_price", fake_load)
+
+    engine = create_engine("postgresql+psycopg://x:x@127.0.0.1:1/x")
+    with caplog.at_level(logging.INFO, logger="twstock_etl.scheduler"):
+        run_daily_price_job(engine, "TWSE")
+
+    assert "TWSE 日成交 成功載入 4 筆" in caplog.text
+    assert "Logging error" not in caplog.text
+    assert "TypeError" not in caplog.text
+    assert "Traceback" not in caplog.text
+```
+
+**6.4 新增 `test_run_daily_price_job_skip`**（第 1 輪 Blocker 1 的回歸測試：略過不可以被記成錯誤，
+也不可以印成「成功載入 0 筆」）：
+
+```python
+def test_run_daily_price_job_skip(monkeypatch, caplog):
+    """被略過時要記「略過」，且不得出現任何 ERROR 紀錄。"""
+    import logging
+    from datetime import date
+
+    from twstock_etl.jobs import PriceJobResult
+    from twstock_etl.scheduler import run_daily_price_job
+
+    def fake_load(engine, market, trade_date, **kwargs):
+        return PriceJobResult(
+            market=market,
+            trade_date=date(2026, 9, 18),
+            rows=0,
+            skipped_unknown=0,
+            skip_reason="已完成，略過",
+        )
+
+    monkeypatch.setattr("twstock_etl.scheduler.load_daily_price", fake_load)
+
+    engine = create_engine("postgresql+psycopg://x:x@127.0.0.1:1/x")
+    with caplog.at_level(logging.INFO, logger="twstock_etl.scheduler"):
+        run_daily_price_job(engine, "TWSE")
+
+    assert "TWSE 日成交 略過：已完成，略過" in caplog.text
+    assert "成功載入" not in caplog.text
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+```
+
+**6.5 新增 `test_run_trading_calendar_job_success`**：
+
+```python
+def test_run_trading_calendar_job_success(monkeypatch, caplog):
+    """測試交易日曆 wrapper 成功路徑的 log 輸出。"""
+    import logging
+
+    from twstock_etl.jobs import CalendarLoadResult
+    from twstock_etl.scheduler import run_trading_calendar_job
+
+    def fake_refresh(engine, year, **kwargs):
+        return [
+            CalendarLoadResult(year=year, days=365, open_days=246, closed_days=119),
+            CalendarLoadResult(year=year + 1, days=365, open_days=246, closed_days=119),
+        ]
+
+    monkeypatch.setattr(
+        "twstock_etl.scheduler.refresh_calendar_with_next_year", fake_refresh
+    )
+
+    engine = create_engine("postgresql+psycopg://x:x@127.0.0.1:1/x")
+    with caplog.at_level(logging.INFO, logger="twstock_etl.scheduler"):
+        run_trading_calendar_job(engine)
+
+    assert "成功刷新 2 個年份的交易日曆" in caplog.text
+    assert "Logging error" not in caplog.text
+    assert "TypeError" not in caplog.text
+    assert "Traceback" not in caplog.text
+```
+
+`test_scheduler_jobs`、`test_scheduler_job_triggers`、`test_run_stock_list_job_error_handling` 不准動。
+
+### 驗收指令
+
+```bash
+cd /home/claude/TwStock && .venv/bin/python -m pytest etl/tests/test_etl_scheduler.py -q
+# 預期：輸出含 "8 passed"（5 個既有 + 本子任務新增 3 個），0 failed
+
+cd /home/claude/TwStock && grep -n "    from datetime import" etl/twstock_etl/scheduler.py
+# 預期：沒有任何輸出（函式內不得有區域 import）
+
+cd /home/claude/TwStock && TWSTOCK_TEST_DATABASE_URL=$(scripts/pg_temp.sh start) \
+  .venv/bin/python -m pytest -rs -q
+# 預期：全部 passed、0 failed
+```
+
+### 不要做的事
+
+- 不准動 `jobs.py`、`cli.py`。
+- 不准改 `build_scheduler` 的 cron 時間、時區或 `next_run_time` 設定。
+- 不准把 `run_stock_list_job`／`run_trading_calendar_job` 改成走 `_log_job_outcome`
+  （它們回傳的不是這組 dataclass）。
+
+---
+
+## T1-4d　`jobs.py`：`refresh_stock_list`／`refresh_trading_calendar`／`rebuild_calendar_from_index` 補 `etl_job_log`
+
+依賴：T1-4c。這是 T1-4 拆分後的最後一個子任務，也是第 4 輪 Blocker 5。
+
+### 範圍（只准動這兩個檔案）
+
+| 路徑 | 動作 |
+| --- | --- |
+| `etl/twstock_etl/jobs.py` | 修改：頂層 import 加 `Sequence`、新增 `_write_calendar_year`、改寫 `refresh_stock_list`／`refresh_trading_calendar`／`refresh_calendar_with_next_year`／`rebuild_calendar_from_index` |
+| `etl/tests/test_etl_job_records.py` | **新增**（3 個測試） |
+
+`jobs.py` 的 `load_daily_price`／`load_index_month`／`load_adj_factors`／`is_trading_day`
+與三個 `*JobResult` dataclass 這個子任務**一律不准動**（T1-4a 已處理）。
+
+### 1. 頂層 import（`etl/twstock_etl/jobs.py`）
+
+在 `import json` 上方（第 3 行之前）加一行：
+
+```python
+from collections.abc import Sequence
+```
+
+（依 isort 慣例放在標準函式庫區塊；`import json`、`import logging` 之後、`from dataclasses import dataclass` 之前也可以，
+只要 `.venv/bin/python -m pytest` 不報錯即可。）
+
+### 2. `refresh_stock_list`：把函式本體包一層 `job_run`
+
+job 名稱 `stock_list_twse` / `stock_list_tpex`（`market.lower()`）、`target_key=market`、`target_date=None`。
+**簽名與回傳值不變**，`SourceFormatError` 仍然往外拋（由 `job_run` 記 `failed` 後重拋）。
+把 `if html is None:` 到 `return StockLoadResult(...)` 整段換成：
+
+```python
+    job_name = f"stock_list_{market.lower()}"
+    loaded = 0
+    deactivated = 0
+
+    with job_run(engine, job_name, target_key=market) as run:
+        if html is None:
+            html = fetch_isin_html(market, client)
+
+        records = parse_isin_html(html, market)
+
+        with engine.begin() as conn:
+            if deactivate:
+                previous = count_active_stocks(conn, market)
+                if previous > 0 and len(records) < previous * DEACTIVATE_MIN_RATIO:
+                    raise SourceFormatError(
+                        f"{market} 本次解析 {len(records)} 筆，低於前次有效筆數 {previous} 的 "
+                        f"{DEACTIVATE_MIN_RATIO:.0%}（門檻 {previous * DEACTIVATE_MIN_RATIO:.0f} 筆），拒絕停用缺漏個股"
+                    )
+                if previous == 0 and len(records) < DEACTIVATE_MIN_ABSOLUTE:
+                    raise SourceFormatError(
+                        f"{market} 本次解析 {len(records)} 筆，少於初次建庫下限 "
+                        f"{DEACTIVATE_MIN_ABSOLUTE} 筆，拒絕停用缺漏個股"
+                    )
+            loaded = upsert_stocks(conn, records)
+            deactivated = deactivate_missing(conn, market, {r.stock_id for r in records}) if deactivate else 0
+
+        run.rows = loaded
+
+    logger.info(
+        "刷新 %s 個股清單完成：載入 %d 筆，停用 %d 筆", market, loaded, deactivated
+    )
+    return StockLoadResult(market=market, records=loaded, deactivated=deactivated)
+```
+
+停用保護的兩個錯誤訊息一字不改（既有測試用 `match="初次建庫下限"`、`70%` 斷言）。
+
+### 3. 新增 `_write_calendar_year`
+
+放在 `refresh_trading_calendar` 之前：
+
+```python
+def _write_calendar_year(
+    engine: Engine, year: int, days: Sequence[CalendarDay]
+) -> CalendarLoadResult:
+    """把已經 build 好的某年日曆寫入 trading_calendar，並記一列 etl_job_log。
+
+    job_name="trading_calendar"、target_key=f"{year:04d}"、run.rows = len(days)。
+    此 job 不會 skip，直接回傳 CalendarLoadResult。
+
+    Args:
+        engine: SQLAlchemy Engine
+        year: 年份
+        days: 該年每一天的 CalendarDay
+
+    Returns:
+        CalendarLoadResult
+    """
+    open_days = sum(1 for d in days if d.is_open)
+    closed_days = len(days) - open_days
+
+    with job_run(engine, "trading_calendar", target_key=f"{year:04d}") as run:
+        with engine.begin() as conn:
+            upsert_calendar(conn, days)
+        run.rows = len(days)
+
+    logger.info(
+        "刷新 %d 年交易日曆完成：共 %d 天，開市 %d 天，休市 %d 天",
+        year,
+        len(days),
+        open_days,
+        closed_days,
+    )
+    return CalendarLoadResult(
+        year=year, days=len(days), open_days=open_days, closed_days=closed_days
+    )
+```
+
+### 4. `refresh_trading_calendar`：改用 `_write_calendar_year`
+
+把函式本體（`if payload is None:` 到 `return CalendarLoadResult(...)`）換成：
+
+```python
+    if payload is None:
+        payload = fetch_holiday_schedule(client)
+
+    holidays = parse_holiday_schedule(payload)
+    days = build_calendar(year, holidays)
+
+    return _write_calendar_year(engine, year, days)
+```
+
+`build_calendar` 的 `SourceFormatError`（年份不符）發生在進 `job_run` 之前，
+**不會**留下 `status='failed'` 的列——既有測試 `test_load_calendar_wrong_year` 仍然通過。
+
+### 5. `refresh_calendar_with_next_year`：寫入改走 `_write_calendar_year`
+
+把 `for y in [year, year + 1]:` 這段迴圈換成：
+
+```python
+    for y in [year, year + 1]:
+        try:
+            days = build_calendar(y, holidays)
+        except SourceFormatError:
+            if y == year + 1:
+                logger.info("年份 %d 的交易日曆官方尚未公布，略過", y)
+                continue
+            raise
+
+        results.append(_write_calendar_year(engine, y, days))
+```
+
+重點：`build_calendar` 在 `try` 裡、`_write_calendar_year` 在 `try` 外，
+所以「year+1 尚未公布」**不可能**留下 `status='failed'` 的列（D-025）。
+
+### 6. `rebuild_calendar_from_index`：把函式本體包一層 `job_run`
+
+job 名稱 `calendar_from_index`、`target_key=f"{year:04d}"`。把 `with engine.begin() as conn:`
+（取 `dates` 那段）到 `return CalendarLoadResult(...)` 整段換成：
+
+```python
+    days_total = 0
+    open_days = 0
+    closed_days = 0
+
+    with job_run(engine, "calendar_from_index", target_key=f"{year:04d}") as run:
+        with engine.begin() as conn:
+            dates = index_trade_dates(conn, index_id, year)
+
+        if len(dates) < 200:
+            raise SourceFormatError(
+                f"{year} 年 {index_id} 只有 {len(dates)} 個交易日，"
+                f"不足以推算日曆，請先回補指數"
+            )
+
+        # 產生該年每一天
+        all_days = []
+        current_date = date(year, 1, 1)
+        end_date = date(year, 12, 31)
+
+        while current_date <= end_date:
+            if current_date in dates:
+                day = CalendarDay(trade_date=current_date, is_open=True, note=None)
+            else:
+                day = CalendarDay(
+                    trade_date=current_date, is_open=False, note="未開市（由指數回補推得）"
+                )
+            all_days.append(day)
+            current_date = current_date + timedelta(days=1)
+
+        # 寫入
+        days_total = len(all_days)
+        open_days = sum(1 for d in all_days if d.is_open)
+        closed_days = days_total - open_days
+
+        with engine.begin() as conn:
+            if overwrite:
+                upsert_calendar(conn, all_days)
+            else:
+                insert_calendar_if_absent(conn, all_days)
+
+        run.rows = days_total
+
+    logger.info(
+        "從 %s 指數反推 %d 年日曆完成：共 %d 天，開市 %d 天，休市 %d 天",
+        index_id,
+        year,
+        days_total,
+        open_days,
+        closed_days,
+    )
+    return CalendarLoadResult(
+        year=year, days=days_total, open_days=open_days, closed_days=closed_days
+    )
+```
+
+「指數資料不足」是真的失敗，留在 `job_run` 內記 `failed` 後重拋是正確的
+（既有測試 `test_rebuild_calendar_from_index` 用 `pytest.raises(SourceFormatError)`，仍然通過）。
+
+### 7. 測試：新增 `etl/tests/test_etl_job_records.py`
+
+```python
+"""既有 job 的 etl_job_log 紀錄測試（規格 §3.1、D-025）。"""
+
+import json
+from pathlib import Path
+
+import pytest
+from sqlalchemy import select
+
+from twstock_db.tables import etl_job_log
+from twstock_etl.errors import SourceFormatError
+from twstock_etl.jobs import refresh_stock_list, refresh_trading_calendar
+
+
+def _fixture(name: str) -> Path:
+    return Path("etl/tests/fixtures") / name
+
+
+def _job_rows(engine, job_name: str) -> list[tuple[str | None, str]]:
+    """回傳該 job_name 的 (target_key, status) 清單。"""
+    with engine.begin() as conn:
+        return [
+            (row.target_key, row.status)
+            for row in conn.execute(
+                select(etl_job_log.c.target_key, etl_job_log.c.status)
+                .where(etl_job_log.c.job_name == job_name)
+                .order_by(etl_job_log.c.job_id)
+            )
+        ]
+
+
+def test_refresh_stock_list_writes_job_log(clean_db):
+    """個股清單成功時要留下一列 stock_list_twse / success。"""
+    html = _fixture("isin_twse_strmode2.html").read_text(encoding="utf-8")
+
+    result = refresh_stock_list(clean_db, "TWSE", html=html)
+
+    assert result.market == "TWSE"
+    assert _job_rows(clean_db, "stock_list_twse") == [("TWSE", "success")]
+
+
+def test_refresh_stock_list_guard_writes_failed(clean_db):
+    """停用保護觸發時要留下一列 stock_list_twse / failed，且例外仍往外拋。"""
+    html = _fixture("isin_twse_strmode2.html").read_text(encoding="utf-8")
+
+    with pytest.raises(SourceFormatError, match="初次建庫下限"):
+        refresh_stock_list(clean_db, "TWSE", html=html, deactivate=True)
+
+    assert _job_rows(clean_db, "stock_list_twse") == [("TWSE", "failed")]
+
+
+def test_refresh_trading_calendar_writes_job_log(clean_db):
+    """交易日曆成功時要留下一列 trading_calendar / success。"""
+    payload = json.loads(
+        _fixture("twse_holiday_schedule_2026.json").read_text(encoding="utf-8")
+    )
+
+    result = refresh_trading_calendar(clean_db, 2026, payload=payload)
+
+    assert result.year == 2026
+    assert _job_rows(clean_db, "trading_calendar") == [("2026", "success")]
+```
+
+### 驗收指令
+
+```bash
+cd /home/claude/TwStock && TWSTOCK_TEST_DATABASE_URL=$(scripts/pg_temp.sh start) \
+  .venv/bin/python -m pytest etl/tests/test_etl_job_records.py -q
+# 預期：輸出含 "3 passed"，0 failed
+
+cd /home/claude/TwStock && TWSTOCK_TEST_DATABASE_URL=$(scripts/pg_temp.sh start) \
+  .venv/bin/python -m pytest -rs -q
+# 預期：全部 passed、0 failed；skipped 只有 TimescaleDB 那一筆
+
+# §T1-4 完整 CLI 驗收序列
+cd /home/claude/TwStock && export DATABASE_URL=$(scripts/pg_temp.sh reset) && \
+  .venv/bin/alembic -c db/alembic.ini upgrade head >/dev/null && \
+  .venv/bin/python -m twstock_etl.cli load-stocks --market TWSE --file etl/tests/fixtures/isin_twse_strmode2.html && \
+  .venv/bin/python -m twstock_etl.cli load-stocks --market TPEx --file etl/tests/fixtures/isin_tpex_strmode4.html && \
+  .venv/bin/python -m twstock_etl.cli load-calendar --year 2026 --file etl/tests/fixtures/twse_holiday_schedule_2026.json && \
+  .venv/bin/python -m twstock_etl.cli load-price --market TWSE --date 2026-09-18 --file etl/tests/fixtures/TWSE_price_20260918.json && \
+  .venv/bin/python -m twstock_etl.cli load-price --market TPEx --date 2026-09-18 --file etl/tests/fixtures/TPEx_price_20260918.json && \
+  .venv/bin/python -m twstock_etl.cli load-index --year 2026 --month 9 --file etl/tests/fixtures/TAIEX_index_202609.json && \
+  .venv/bin/python -m twstock_etl.cli load-exright --from 2026-09-01 --to 2026-09-30 --file etl/tests/fixtures/exright_20260901_20260930.json
+# 預期（最後四行）：
+# loaded market=TWSE date=2026-09-18 rows=4 skipped_unknown=1
+# loaded market=TPEx date=2026-09-18 rows=3 skipped_unknown=1
+# loaded index=TAIEX month=2026-09 rows=3
+# loaded exright from=2026-09-01 to=2026-09-30 rows=2
+
+# 七種 job_name 都要有紀錄，且沒有 failed（第 4 輪 Blocker 5 的驗收查詢）
+cd /home/claude/TwStock && /usr/lib/postgresql/16/bin/psql "${DATABASE_URL/postgresql+psycopg/postgresql}" \
+  -t -c "SELECT job_name || ' ' || status FROM etl_job_log GROUP BY 1 ORDER BY 1"
+# 預期（7 行，順序如下，且不得出現任何 failed）：
+#  adj_factor_twse success
+#  daily_price_tpex success
+#  daily_price_twse success
+#  index_daily_taiex success
+#  stock_list_tpex success
+#  stock_list_twse success
+#  trading_calendar success
+```
+
+回報時**必須**附上最後那個 SQL 查詢的完整輸出，不可以只貼 `loaded ...` 幾行。
+
+### 不要做的事
+
+- 不准動 `load_daily_price`／`load_index_month`／`load_adj_factors`（T1-4a 已處理）。
+- 不准動 `cli.py`、`scheduler.py`、`loaders/job_log.py`、`sources/`、`loaders/price.py`。
+- 不准替這三個 job 加 `has_successful_run` 去重或 skip 分支（日曆與個股清單每天都要重刷，
+  §3.1 明訂 `run.note` 恆為 `None`）。
+- 不准改停用保護的錯誤訊息字串、也不准改既有測試的斷言方向。
 
 ---
 
@@ -2453,7 +3490,11 @@ cd /home/claude/TwStock && docker compose -f deploy/docker-compose.yml --env-fil
 | T1-1 | Migration 0002：價格三表 + etl_job_log，與 hypertable 雙簽名 | — | DONE | `docs/reviews/T1-1.md` |
 | T1-2 | 來源 parser：日成交（上市／上櫃）、加權指數、除權除息 | T1-1（models 共用，可平行但順序照排） | DONE | `docs/reviews/T1-2.md` |
 | T1-3 | Loader：價格三表寫入、未知代號過濾、etl_job_log 紀錄 | T1-1、T1-2 | DONE | `docs/reviews/T1-3.md` |
-| T1-4 | Job、CLI、排程：每日盤後自動更新，並修掉 U-3 與 U-5 | T1-3 | BLOCKED | `docs/reviews/T1-4.md` |
-| T1-5 | 回補腳本：速率限制、斷點續傳、進度輸出 | T1-4 | TODO | — |
+| T1-4 | Job、CLI、排程：每日盤後自動更新，並修掉 U-3 與 U-5 | T1-3 | SPLIT（拆成 T1-4a～T1-4d） | `docs/reviews/T1-4.md` |
+| T1-4a | `jobs.py`：三個價格 job 改單一 `return`，`load_index_month` 加 `now` 注入 | T1-4 | TODO | — |
+| T1-4b | `cli.py`：`load-index`／`load-exright` 的 skip 輸出對齊 §4 表格 | T1-4a | TODO | — |
+| T1-4c | `scheduler.py`：`_log_job_outcome` helper 與四個 wrapper 的 log 測試 | T1-4a | TODO | — |
+| T1-4d | `jobs.py`：個股清單／交易日曆／指數反推日曆補 `etl_job_log` | T1-4c | TODO | — |
+| T1-5 | 回補腳本：速率限制、斷點續傳、進度輸出 | T1-4a～T1-4d 全數 DONE | TODO | — |
 | T1-6 | API：個股明細、日 K（含還原）、指數、ETL 狀態 | T1-5（驗收要用回補後的資料） | TODO | — |
 | T1-7 | Web：個股 K 線頁、ETL 狀態頁，與 M1 整合驗收 | T1-6 | TODO | — |

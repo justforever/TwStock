@@ -116,6 +116,46 @@ docker compose -f deploy/docker-compose.yml exec etl \
 
 若首次執行就噴 `SourceFormatError`，代表官方頁面格式與 parser 預期不符，請把實際回應存檔後更新 `etl/tests/fixtures/` 與 `etl/twstock_etl/sources/`，並在 `docs/decisions.md` 補記。
 
+### 6. 歷史回補（5年資料）
+
+初次開發或環境重建時，需要補回 5 年的歷史數據。`scripts/backfill.py` 提供四個子指令：
+
+```bash
+# 查看用法
+scripts/backfill.py --help
+
+# 建議的執行順序：
+
+# 1. 先載入個股清單（見上方第 5 節）
+.venv/bin/python -m twstock_etl.cli load-stocks --market TWSE
+.venv/bin/python -m twstock_etl.cli load-stocks --market TPEx
+
+# 2. 加權指數月度資料（約 60 次 API 請求，預設 3 秒延遲）
+.venv/bin/python scripts/backfill.py index --from 2021-01 --to 2026-09
+
+# 3. 反推交易日曆（無 API 請求，用指數日期推算）
+.venv/bin/python scripts/backfill.py calendar --from-year 2021 --to-year 2025
+
+# 4. 上市個股日 K（TWSE，約 1,200 次 API 請求，預設約需 1 小時）
+.venv/bin/python scripts/backfill.py price --market TWSE --from 2021-01-04 --to 2026-09-18
+
+# 5. 上櫃個股日 K（TPEx，約 1,200 次 API 請求，預設約需 1 小時）
+.venv/bin/python scripts/backfill.py price --market TPEx --from 2021-01-04 --to 2026-09-18
+
+# 6. 除權息資料（約每個月 1 次 API 請求）
+.venv/bin/python scripts/backfill.py exright --from 2021-01-01 --to 2026-09-18
+```
+
+各指令支援以下選項：
+
+- `--sleep SECONDS`：兩次 API 請求間隔（預設 3.0 秒）
+- `--max-failures N`：容許最多失敗次數，超過即中止（預設 10）
+- `--force`：強制重新抓取，不使用斷點續傳（預設優先跳過已完成日期）
+- `--source-dir PATH`：離線模式，從目錄讀 JSON 檔案而不發 HTTP 請求（用於開發測試）
+- `--dry-run`：只印執行計畫，不寫 DB、不發 HTTP
+
+任何時候都可以按 Ctrl-C 中斷，重新執行時會自動從中斷處繼續（用 `etl_job_log` 表追蹤進度）。
+
 ## 本機開發（無 Docker）
 
 需要 Python 3.11+、PostgreSQL 16、Node 22。

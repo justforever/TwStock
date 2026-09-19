@@ -3,7 +3,7 @@
 - 里程碑：M1 價格 + K 線（見 `docs/plan.md`「開發里程碑」）
 - 作者：Architect（claude-opus-5）｜ 日期：2026-09-19
 - 前一里程碑：`docs/specs/M0-skeleton.md`、驗收報告 `docs/reports/M0.md`
-- 相關決策：`docs/decisions.md`（沿用 D-001 ～ D-014，新增 D-015 ～ D-026）
+- 相關決策：`docs/decisions.md`（沿用 D-001 ～ D-014，新增 D-016 ～ D-026）
 
 ## 0. 目標與完成標準
 
@@ -476,7 +476,7 @@ cd /home/claude/TwStock && export DATABASE_URL=$(scripts/pg_temp.sh start) && \
 ### 不要做的事
 
 - 不要建 continuous aggregate（週 K／月 K）與壓縮政策——那是 M2 之後的事。
-- 不要加 `daily_price → stock` 的外鍵（見 D-016）。
+- 不要加 `daily_price → stock` 的外鍵（見 D-017）。
 - 不要改 `0001` migration。
 - 不要在這個任務寫任何 ETL／API／前端程式。
 
@@ -1359,7 +1359,7 @@ def load_adj_factors(
 | `adj_factor_twse` | `CronTrigger(hour=16, minute=10)` | `load_adj_factors(engine, 今天-7天, 今天)` |
 
 - **重試機制就是「同一天排三次」**：15:35 抓失敗時，17:35 與 19:35 會再跑；已成功的日期靠
-  `has_successful_run` 直接 `skip`，不會重複抓（見 D-021）。
+  `has_successful_run` 直接 `skip`，不會重複抓（見 D-022）。
 - 每個 wrapper 函式（`run_daily_price_job(engine, market)` 等）內部 `try/except Exception: logger.exception(...)`，
   單一 job 失敗不可中斷排程器。
 - **wrapper 一律透過回傳的結果物件取值，不准把結果物件直接丟給 `%d`**（第 3 輪 Blocker 4：
@@ -2787,7 +2787,7 @@ cd /home/claude/TwStock && .venv/bin/python scripts/backfill.py --help && .venv/
 
 ### 目標
 
-實作 §5 的五個端點，還原價在 API 層即時計算（見 D-017）。
+實作 §5 的五個端點，還原價在 API 層即時計算（見 D-018）。
 
 ### 新增 / 修改檔案
 
@@ -3136,7 +3136,7 @@ cd /home/claude/TwStock && export DATABASE_URL=$(scripts/pg_temp.sh reset) && \
 
 ### 不要做的事
 
-- **不要**在 DB 裡新增 `adj_close` 欄位，也不要在 ETL 階段預先算還原價（見 D-017）。
+- **不要**在 DB 裡新增 `adj_close` 欄位，也不要在 ETL 階段預先算還原價（見 D-018）。
 - 不要做週 K／月 K 聚合（`freq` 參數留到 M2）。
 - 不要做寫入型端點（手動重跑 ETL 是 M2 以後的事）。
 - 不要開 CORS、不要加認證。
@@ -3474,11 +3474,11 @@ cd /home/claude/TwStock && docker compose -f deploy/docker-compose.yml --env-fil
 
 | # | M0 問題 | M1 處理 |
 | --- | --- | --- |
-| U-1 | 真實來源格式未驗證 | 仍無法在本環境解決。M1 把風險收斂成 §7 的 V-2～V-5 逐項檢查，並讓上櫃端點有備援路徑（D-015） |
-| U-2 | TimescaleDB 路徑未實跑 | T1-1 加 mock 測試與條件跳過測試，並把 `create_hypertable_if_available` 改成新舊簽名雙保險（D-018）。**實跑仍留 V-1**，文件已寫明 |
-| U-3 | 停用保護是絕對門檻 500 筆 | T1-4 改成相對比例 70%（D-019） |
+| U-1 | 真實來源格式未驗證 | 仍無法在本環境解決。M1 把風險收斂成 §7 的 V-2～V-5 逐項檢查，並讓上櫃端點有備援路徑（D-016） |
+| U-2 | TimescaleDB 路徑未實跑 | T1-1 加 mock 測試與條件跳過測試，並把 `create_hypertable_if_available` 改成新舊簽名雙保險（D-019）。**實跑仍留 V-1**，文件已寫明 |
+| U-3 | 停用保護是絕對門檻 500 筆 | T1-4 改成相對比例 70%（D-020） |
 | U-4 | `docker build` 從未執行 | 仍留給使用者（V-1）。M1 沒有改 Dockerfile，風險不變 |
-| U-5 | 交易日曆跨年空窗、無歷史年度 | T1-4 的 `refresh_calendar_with_next_year`（每天刷新今年＋明年）與 `rebuild_calendar_from_index`（歷史年度由指數反推），T1-5 提供 `backfill.py calendar`（D-020） |
+| U-5 | 交易日曆跨年空窗、無歷史年度 | T1-4 的 `refresh_calendar_with_next_year`（每天刷新今年＋明年）與 `rebuild_calendar_from_index`（歷史年度由指數反推），T1-5 提供 `backfill.py calendar`（D-021） |
 | U-6 | 搜尋頁 loading 閃爍 | T1-7 用請求序號修掉 |
 | U-7 | `/` 快捷鍵判斷不通用 | T1-7 改成通用判斷（個股頁有第二個輸入元件了） |
 | U-8 | 搜尋沒有模糊比對與索引 | 不處理，維持 M2 再評估 |

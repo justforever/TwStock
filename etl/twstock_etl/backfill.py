@@ -215,7 +215,7 @@ def backfill_prices(
                             _progress_line(
                                 i,
                                 total,
-                                day.isoformat(),
+                                f"{day.isoformat()} {market}",
                                 skip_reason="已完成",
                             ),
                             file=options.out,
@@ -229,7 +229,7 @@ def backfill_prices(
                         _progress_line(
                             i,
                             total,
-                            day.isoformat(),
+                            f"{day.isoformat()} {market}",
                             dry_run=True,
                         ),
                         file=options.out,
@@ -268,7 +268,7 @@ def backfill_prices(
                     _progress_line(
                         i,
                         total,
-                        day.isoformat(),
+                        f"{day.isoformat()} {market}",
                         rows=result.rows,
                         elapsed=elapsed,
                         eta=remaining,
@@ -285,7 +285,7 @@ def backfill_prices(
                     _progress_line(
                         i,
                         total,
-                        day.isoformat(),
+                        f"{day.isoformat()} {market}",
                         fail_msg=error_msg,
                     ),
                     file=options.out,
@@ -299,7 +299,7 @@ def backfill_prices(
                     )
 
     except KeyboardInterrupt:
-        summary.interrupted_at = days[len(days) - (total - i)].isoformat()
+        summary.interrupted_at = days[i - 1].isoformat()
         logger.info("被使用者中斷")
 
     elapsed = (datetime.now(TAIPEI) - start_time).total_seconds()
@@ -442,7 +442,7 @@ def backfill_index(
                     )
 
     except KeyboardInterrupt:
-        summary.interrupted_at = months[len(months) - (total - i)]
+        summary.interrupted_at = months[i - 1]
         logger.info("被使用者中斷")
 
     elapsed = (datetime.now(TAIPEI) - start_time).total_seconds()
@@ -479,10 +479,10 @@ def backfill_exright(
         else:
             current = current.replace(month=current.month + 1)
 
-    # 截至 end
-    months = [(s, min(e, end)) for s, e in months]
+    # 保存原始月末日期用於 fixture 檔名，然後截至 end 用於 API 呼叫
+    months_with_original = [(s, e, min(e, end)) for s, e in months]
 
-    total = len(months)
+    total = len(months_with_original)
     summary = BackfillSummary(total=total, done=0, skipped=0, failed=0, rows=0)
     start_time = datetime.now(TAIPEI)
     limiter = RateLimiter(
@@ -492,9 +492,10 @@ def backfill_exright(
     )
 
     try:
-        for i, (month_start, month_end) in enumerate(months, start=1):
+        for i, (month_start, month_end_original, month_end_clipped) in enumerate(months_with_original, start=1):
             try:
-                target_key = f"{month_start.strftime('%Y%m%d')}-{month_end.strftime('%Y%m%d')}"
+                # 使用 clip 過的月末日期建立 target_key，與 load_adj_factors() 內部一致
+                target_key = f"{month_start.strftime('%Y%m%d')}-{month_end_clipped.strftime('%Y%m%d')}"
 
                 # 檢查斷點續傳
                 with engine.begin() as conn:
@@ -537,8 +538,8 @@ def backfill_exright(
                 # 執行 job
                 payload = None
                 if options.source_dir is not None:
-                    # 離線模式：從檔案讀 JSON
-                    file_name = f"exright_{month_start.strftime('%Y%m%d')}_{month_end.strftime('%Y%m%d')}.json"
+                    # 離線模式：從檔案讀 JSON，使用原始月末日期（不是被 clip 過的）
+                    file_name = f"exright_{month_start.strftime('%Y%m%d')}_{month_end_original.strftime('%Y%m%d')}.json"
                     file_path = options.source_dir / file_name
                     try:
                         import json
@@ -547,7 +548,8 @@ def backfill_exright(
                     except FileNotFoundError:
                         raise FileNotFoundError(f"檔案不存在：{file_path}")
 
-                result = load_adj_factors(engine, month_start, month_end, payload=payload)
+                # 使用 clip 過的月末日期呼叫 API（若有的話）
+                result = load_adj_factors(engine, month_start, month_end_clipped, payload=payload)
                 summary.done += 1
                 summary.rows += result.rows
 
@@ -591,9 +593,10 @@ def backfill_exright(
                     )
 
     except KeyboardInterrupt:
-        idx = len(months) - (total - i)
+        idx = i - 1
         if idx >= 0:
-            summary.interrupted_at = f"{months[idx][0].strftime('%Y%m%d')}-{months[idx][1].strftime('%Y%m%d')}"
+            _, _, month_end_clipped_at_interrupt = months_with_original[idx]
+            summary.interrupted_at = f"{months_with_original[idx][0].strftime('%Y%m%d')}-{month_end_clipped_at_interrupt.strftime('%Y%m%d')}"
         logger.info("被使用者中斷")
 
     elapsed = (datetime.now(TAIPEI) - start_time).total_seconds()
@@ -704,7 +707,7 @@ def backfill_calendar(
                     )
 
     except KeyboardInterrupt:
-        idx = len(years) - (total - i)
+        idx = i - 1
         if idx >= 0:
             summary.interrupted_at = f"{years[idx]:04d}"
         logger.info("被使用者中斷")

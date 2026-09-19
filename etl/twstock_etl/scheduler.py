@@ -1,7 +1,7 @@
 """APScheduler 排程定義。"""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -19,6 +19,21 @@ from twstock_etl.jobs import (
 logger = logging.getLogger(__name__)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
+
+
+def _log_job_outcome(what: str, result) -> None:
+    """統一記錄 job 結果：被略過記「略過」，實際執行記筆數。
+
+    result 需有 rows: int 與 skip_reason: str | None（見規格 §3 共同契約、D-024）。
+
+    Args:
+        what: 這次 job 的描述，例如「2026-09-18 TWSE 日成交」
+        result: PriceJobResult / IndexJobResult / AdjFactorJobResult
+    """
+    if result.skip_reason is not None:
+        logger.info("%s 略過：%s", what, result.skip_reason)
+    else:
+        logger.info("%s 成功載入 %d 筆", what, result.rows)
 
 
 def run_stock_list_job(engine: Engine) -> None:
@@ -63,12 +78,9 @@ def run_daily_price_job(engine: Engine, market: str) -> None:
     """
     try:
         today = datetime.now(TAIPEI).date()
-        result = load_daily_price(engine, market, today)
-        logger.info(
-            "成功載入 %s %s 日成交：%d 筆",
-            today,
-            market,
-            result.rows,
+        _log_job_outcome(
+            f"{today} {market} 日成交",
+            load_daily_price(engine, market, today),
         )
     except Exception:
         logger.exception("載入 %s 日成交失敗", market)
@@ -83,8 +95,10 @@ def run_index_month_job(engine: Engine) -> None:
     try:
         now = datetime.now(TAIPEI)
         year, month = now.year, now.month
-        result = load_index_month(engine, year, month, force=True)
-        logger.info("成功載入 %04d-%02d TAIEX 指數：%d 筆", year, month, result.rows)
+        _log_job_outcome(
+            f"{year:04d}-{month:02d} TAIEX 指數",
+            load_index_month(engine, year, month, force=True),
+        )
     except Exception:
         logger.exception("載入 TAIEX 指數失敗")
 
@@ -96,13 +110,13 @@ def run_adj_factors_job(engine: Engine) -> None:
         engine: SQLAlchemy Engine
     """
     try:
-        from datetime import timedelta
-
         today = datetime.now(TAIPEI).date()
         start = today - timedelta(days=7)
         end = today
-        result = load_adj_factors(engine, start, end)
-        logger.info("成功載入 %s 至 %s 除權除息：%d 筆", start, end, result.rows)
+        _log_job_outcome(
+            f"{start} 至 {end} 除權除息",
+            load_adj_factors(engine, start, end),
+        )
     except Exception:
         logger.exception("載入除權除息失敗")
 

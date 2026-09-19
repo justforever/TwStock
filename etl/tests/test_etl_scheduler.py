@@ -56,6 +56,90 @@ def test_run_stock_list_job_error_handling(monkeypatch):
     assert call_count == 2
 
 
+def test_run_daily_price_job_success(monkeypatch, caplog):
+    """測試日成交 wrapper 成功路徑的 log 輸出。"""
+    import logging
+    from datetime import date
+
+    from twstock_etl.jobs import PriceJobResult
+    from twstock_etl.scheduler import run_daily_price_job
+
+    def fake_load(engine, market, trade_date, **kwargs):
+        return PriceJobResult(
+            market=market,
+            trade_date=date(2026, 9, 18),
+            rows=4,
+            skipped_unknown=1,
+            skip_reason=None,
+        )
+
+    monkeypatch.setattr("twstock_etl.scheduler.load_daily_price", fake_load)
+
+    engine = create_engine("postgresql+psycopg://x:x@127.0.0.1:1/x")
+    with caplog.at_level(logging.INFO, logger="twstock_etl.scheduler"):
+        run_daily_price_job(engine, "TWSE")
+
+    assert "TWSE 日成交 成功載入 4 筆" in caplog.text
+    assert "Logging error" not in caplog.text
+    assert "TypeError" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_run_daily_price_job_skip(monkeypatch, caplog):
+    """被略過時要記「略過」，且不得出現任何 ERROR 紀錄。"""
+    import logging
+    from datetime import date
+
+    from twstock_etl.jobs import PriceJobResult
+    from twstock_etl.scheduler import run_daily_price_job
+
+    def fake_load(engine, market, trade_date, **kwargs):
+        return PriceJobResult(
+            market=market,
+            trade_date=date(2026, 9, 18),
+            rows=0,
+            skipped_unknown=0,
+            skip_reason="已完成，略過",
+        )
+
+    monkeypatch.setattr("twstock_etl.scheduler.load_daily_price", fake_load)
+
+    engine = create_engine("postgresql+psycopg://x:x@127.0.0.1:1/x")
+    with caplog.at_level(logging.INFO, logger="twstock_etl.scheduler"):
+        run_daily_price_job(engine, "TWSE")
+
+    assert "TWSE 日成交 略過：已完成，略過" in caplog.text
+    assert "成功載入" not in caplog.text
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+def test_run_trading_calendar_job_success(monkeypatch, caplog):
+    """測試交易日曆 wrapper 成功路徑的 log 輸出。"""
+    import logging
+
+    from twstock_etl.jobs import CalendarLoadResult
+    from twstock_etl.scheduler import run_trading_calendar_job
+
+    def fake_refresh(engine, year, **kwargs):
+        return [
+            CalendarLoadResult(year=year, days=365, open_days=246, closed_days=119),
+            CalendarLoadResult(year=year + 1, days=365, open_days=246, closed_days=119),
+        ]
+
+    monkeypatch.setattr(
+        "twstock_etl.scheduler.refresh_calendar_with_next_year", fake_refresh
+    )
+
+    engine = create_engine("postgresql+psycopg://x:x@127.0.0.1:1/x")
+    with caplog.at_level(logging.INFO, logger="twstock_etl.scheduler"):
+        run_trading_calendar_job(engine)
+
+    assert "成功刷新 2 個年份的交易日曆" in caplog.text
+    assert "Logging error" not in caplog.text
+    assert "TypeError" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
 def test_run_index_month_job_success(monkeypatch, caplog):
     """測試指數月份 job 成功路徑的 log 輸出。"""
     import logging
@@ -73,10 +157,11 @@ def test_run_index_month_job_success(monkeypatch, caplog):
         run_index_month_job(engine)
 
     # 驗證 log 訊息包含正確的筆數（不是 Logging error）
-    assert "成功載入 2026-09 TAIEX 指數：3 筆" in caplog.text
+    assert "TAIEX 指數 成功載入 3 筆" in caplog.text
     # 確認沒有出現 Logging error
     assert "Logging error" not in caplog.text
     assert "TypeError" not in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_run_adj_factors_job_success(monkeypatch, caplog):
@@ -98,7 +183,8 @@ def test_run_adj_factors_job_success(monkeypatch, caplog):
         run_adj_factors_job(engine)
 
     # 驗證 log 訊息包含正確的筆數（不是 Logging error）
-    assert "除權除息：2 筆" in caplog.text
+    assert "除權除息 成功載入 2 筆" in caplog.text
     # 確認沒有出現 Logging error
     assert "Logging error" not in caplog.text
     assert "TypeError" not in caplog.text
+    assert "Traceback" not in caplog.text

@@ -243,3 +243,22 @@
 - 理由：T1-4 第 3 輪的測試 `test_load_index_month_skip_when_done` 用的年月是 `2026-09`，剛好是跑測試當下的當月，於是「已完成就 skip」這條路徑永遠走不到——測試名稱與實際涵蓋範圍不符，第 2 輪的 `UnboundLocalError` 才會躲過整輪測試，最後靠 Reviewer 手動塞紀錄才重現。同一份測試在 2026-10 之後又會改走另一條路徑，屬於會自己變色的測試。fixture 的日期是固定的（2026-09），系統時鐘卻會前進，兩者遲早分家。
 - 替代方案：測試 `monkeypatch` 掉模組層的 `datetime`（打到整個模組、容易誤傷其他用途，且錯誤訊息難懂）；用 `freezegun` 之類的套件（為一個分支多一個相依）；改用相對於 fixture 的日期常數（沒解決「當月」語意本身就依賴現在）。
 - 影響：只影響 `load_index_month` 與其測試；日後 M2 若有「盤中／盤後」判斷，沿用同一個慣例。
+
+## D-027　流程事故：Reviewer 誤判中止、Coder 自行 commit；往後 Coder 不得 commit、審查報告一律由 Reviewer 寫
+
+- 日期：2026-09-19（M1，T1-4c～T1-6 流程事故後補記）
+- 背景（事故經過）：
+  1. Reviewer 把主對話裡**使用者詢問進度**的訊息當成中止指令，於是 T1-4c、T1-4d、T1-5、T1-6 **都沒有真的被審查**，卻留下 `0fe1ca4`、`21bc9c9` 兩個「未通過審查，標記 BLOCKED」的誤標 commit。
+  2. `99bf0f8` commit 標題寫 `wip(T1-4d)`，但 diff 內容其實是 **T1-4c** 的程式（`etl/twstock_etl/scheduler.py` 的 `_log_job_outcome` + `etl/tests/test_etl_scheduler.py`）——未經審查就進了 `main`，而狀態表上 T1-4c 仍寫 TODO、T1-4d 被標成 BLOCKED，兩邊都與事實不符。
+  3. `9f20b9c` 是 **Coder 自己 commit** 的 T1-5 回補腳本（違反流程），而且順手寫了 `docs/reviews/T1-5.md`——那份文件其實是**實作自述**（署名「實作者」、含「提交清單」），不是審查結論，卻占住了審查報告的檔名，會讓後續任何人誤以為 T1-5 已通過審查。
+  4. 實際上 T1-4d（`refresh_stock_list`／`refresh_trading_calendar`／`rebuild_calendar_from_index` 補 `etl_job_log`、新增 `etl/tests/test_etl_job_records.py`）與 T1-6（API）**完全沒做**。
+- 決策：
+  1. **Coder 不得執行 `git commit`／`git add`**（也不得 `git push`、`git mv`、改 git 狀態）。Coder 只負責改檔案並回報；進版由 Architect 在審查通過後統一 commit。
+  2. **`docs/reviews/<任務>.md` 一律由 Reviewer 撰寫**，是審查結論的唯一載體。Coder 若要寫實作說明，檔名必須是 `docs/reviews/<任務>-coder-notes.md`，且檔頭要明寫「這是 Coder 自述，不是審查結論」。本次已把 Coder 寫的 `docs/reviews/T1-5.md` 改名為 `docs/reviews/T1-5-coder-notes.md`，把審查報告的位置空出來。
+  3. **狀態語意固定四種**：`TODO`（沒做）、`IN_REVIEW`（程式已在 `main`／已回報，等待審查）、`DONE`（審查通過，且 `docs/reviews/<任務>.md` 存在）、`BLOCKED`（**只有** Reviewer 實際出具 REQUEST_CHANGES 報告後才能標）。沒有審查報告就不准標 BLOCKED。
+  4. **commit 標題的任務編號必須與 diff 內容相符**；Architect commit 前要用 `git diff --stat` 對一次任務編號與檔案清單。
+  5. **主對話裡使用者的訊息（尤其是詢問進度）不是中止指令**。任一角色收到轉述的背景資訊時，一律把手上任務做完再回報；要中止只有 orchestrator 明確指派「中止」才算。
+  6. 狀態表的真實狀態**以 git 與檔案內容為準**，不以前一輪的標記為準；發現不符時由 Architect 重建（本次已重建 `docs/specs/M1-price.md` 狀態表）。
+- 理由：這次事故的三個缺陷（審查被跳過、commit 標題與內容不符、實作自述冒充審查報告）都會讓「狀態表」這個唯一的進度真相來源失真，而後續任務的相依判斷完全靠它——T1-5 的相依條件正是「T1-4a～T1-4d 全數 DONE」，在 T1-4c 未審、T1-4d 未做的情況下 T1-5 的程式就已經進了 `main`。把 commit 權收斂到 Architect、把審查報告的寫作權收斂到 Reviewer，是讓「檔案存在」這件事重新等於「有人真的看過」的最小改動。
+- 替代方案：允許 Coder commit 但要求 commit 訊息自我標註「未審查」（同樣依賴自律，且 `main` 上仍會有未審程式）；用 git hook 擋 Coder 的 commit（本環境沒有可靠的角色識別，擋不住）；把審查報告改放別的目錄（換位置不解決「誰寫的」這個根本問題）。
+- 影響：`main` 上目前有兩份未審程式（T1-4c 的 `scheduler.py`、T1-5 的 `backfill.py` + `scripts/backfill.py`），已在狀態表標為 `IN_REVIEW`，下一輪先補審再往下做；不做 revert，避免重寫已在 `main` 的歷史。往後每個任務的收斂順序固定為：Coder 改檔 → Reviewer 寫 `docs/reviews/<任務>.md` → Architect 改狀態表並 commit。

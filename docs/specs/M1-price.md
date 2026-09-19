@@ -3493,8 +3493,13 @@ cd /home/claude/TwStock && docker compose -f deploy/docker-compose.yml --env-fil
 | T1-4 | Job、CLI、排程：每日盤後自動更新，並修掉 U-3 與 U-5 | T1-3 | SPLIT（拆成 T1-4a～T1-4d） | `docs/reviews/T1-4.md` |
 | T1-4a | `jobs.py`：三個價格 job 改單一 `return`，`load_index_month` 加 `now` 注入 | T1-4 | DONE | `docs/reviews/T1-4a.md` |
 | T1-4b | `cli.py`：`load-index`／`load-exright` 的 skip 輸出對齊 §4 表格 | T1-4a | DONE | `docs/reviews/T1-4b.md` |
-| T1-4c | `scheduler.py`：`_log_job_outcome` helper 與四個 wrapper 的 log 測試 | T1-4a | TODO | — |
-| T1-4d | `jobs.py`：個股清單／交易日曆／指數反推日曆補 `etl_job_log` | T1-4c | BLOCKED | `docs/reviews/T1-4d.md` |
-| T1-5 | 回補腳本：速率限制、斷點續傳、進度輸出 | T1-4a～T1-4d 全數 DONE | BLOCKED | `docs/reviews/T1-5.md` |
-| T1-6 | API：個股明細、日 K（含還原）、指數、ETL 狀態 | T1-5（驗收要用回補後的資料） | BLOCKED | `docs/reviews/T1-6.md` |
+| T1-4c | `scheduler.py`：`_log_job_outcome` helper 與四個 wrapper 的 log 測試 | T1-4a | IN_REVIEW（程式已在 main，commit 99bf0f8 標題誤植為 T1-4d，待補審） | 待補 `docs/reviews/T1-4c.md` |
+| T1-4d | `jobs.py`：個股清單／交易日曆／指數反推日曆補 `etl_job_log` | T1-4c | TODO（尚未實作，`jobs.py` 三個函式都還沒包 `job_run`、`etl/tests/test_etl_job_records.py` 不存在） | — |
+| T1-5 | 回補腳本：速率限制、斷點續傳、進度輸出 | T1-4a～T1-4d 全數 DONE | IN_REVIEW（程式已在 main，commit 9f20b9c 由 Coder 違規自行 commit，待補審） | 待補 `docs/reviews/T1-5.md`；Coder 自述見 `docs/reviews/T1-5-coder-notes.md` |
+| T1-6 | API：個股明細、日 K（含還原）、指數、ETL 狀態 | T1-5（驗收要用回補後的資料） | TODO（尚未實作，`api/twstock_api/` 只有 M0 的 health／stocks） | — |
 | T1-7 | Web：個股 K 線頁、ETL 狀態頁，與 M1 整合驗收 | T1-6 | TODO | — |
+
+> **狀態表修正紀錄（2026-09-19，Architect）**：上一輪流程中 Reviewer 誤把主對話裡使用者詢問進度的訊息當成中止指令，
+> T1-4c、T1-4d、T1-5、T1-6 都沒有真的審查，狀態表卻被標成 BLOCKED。
+> 本表已依 git 與實際檔案內容重建為真實狀態：`IN_REVIEW` 表示程式已進 main 但尚未審查，`TODO` 表示完全沒做。
+> `0fe1ca4`、`21bc9c9` 兩個 commit 的 BLOCKED 標記是誤標，已由本次修正取代。緣由與防範見 `docs/decisions.md` D-027。

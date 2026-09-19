@@ -3496,7 +3496,7 @@ cd /home/claude/TwStock && docker compose -f deploy/docker-compose.yml --env-fil
 | T1-4c | `scheduler.py`：`_log_job_outcome` helper 與四個 wrapper 的 log 測試 | T1-4a | DONE | `docs/reviews/T1-4c.md` |
 | T1-4d | `jobs.py`：個股清單／交易日曆／指數反推日曆補 `etl_job_log` | T1-4c | DONE | `docs/reviews/T1-4d.md` |
 | T1-5 | 回補腳本：速率限制、斷點續傳、進度輸出 | T1-4a～T1-4d 全數 DONE | DONE | 審查報告 `docs/reviews/T1-5.md`（第 3 輪 APPROVE）；Coder 自述見 `docs/reviews/T1-5-coder-notes.md` |
-| T1-6 | API：個股明細、日 K（含還原）、指數、ETL 狀態 | T1-5（驗收要用回補後的資料） | TODO（尚未實作，`api/twstock_api/` 只有 M0 的 health／stocks） | — |
+| T1-6 | API：個股明細、日 K（含還原）、指數、ETL 狀態 | T1-5（驗收要用回補後的資料） | DONE | 審查報告 `docs/reviews/T1-6.md`（第 1 輪 APPROVE） |
 | T1-7 | Web：個股 K 線頁、ETL 狀態頁，與 M1 整合驗收 | T1-6 | TODO | — |
 
 > **狀態表修正紀錄（2026-09-19，Architect）**：上一輪流程中 Reviewer 誤把主對話裡使用者詢問進度的訊息當成中止指令，

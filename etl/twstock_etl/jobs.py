@@ -1,5 +1,6 @@
 """ETL 工作函式。"""
 
+from collections.abc import Sequence
 import json
 import logging
 from dataclasses import dataclass
@@ -86,31 +87,74 @@ def refresh_stock_list(
     Raises:
         SourceFormatError: 格式錯誤或筆數保護
     """
-    if html is None:
-        html = fetch_isin_html(market, client)
+    job_name = f"stock_list_{market.lower()}"
+    loaded = 0
+    deactivated = 0
 
-    records = parse_isin_html(html, market)
+    with job_run(engine, job_name, target_key=market) as run:
+        if html is None:
+            html = fetch_isin_html(market, client)
 
-    with engine.begin() as conn:
-        if deactivate:
-            previous = count_active_stocks(conn, market)
-            if previous > 0 and len(records) < previous * DEACTIVATE_MIN_RATIO:
-                raise SourceFormatError(
-                    f"{market} 本次解析 {len(records)} 筆，低於前次有效筆數 {previous} 的 "
-                    f"{DEACTIVATE_MIN_RATIO:.0%}（門檻 {previous * DEACTIVATE_MIN_RATIO:.0f} 筆），拒絕停用缺漏個股"
-                )
-            if previous == 0 and len(records) < DEACTIVATE_MIN_ABSOLUTE:
-                raise SourceFormatError(
-                    f"{market} 本次解析 {len(records)} 筆，少於初次建庫下限 "
-                    f"{DEACTIVATE_MIN_ABSOLUTE} 筆，拒絕停用缺漏個股"
-                )
-        loaded = upsert_stocks(conn, records)
-        deactivated = deactivate_missing(conn, market, {r.stock_id for r in records}) if deactivate else 0
+        records = parse_isin_html(html, market)
+
+        with engine.begin() as conn:
+            if deactivate:
+                previous = count_active_stocks(conn, market)
+                if previous > 0 and len(records) < previous * DEACTIVATE_MIN_RATIO:
+                    raise SourceFormatError(
+                        f"{market} 本次解析 {len(records)} 筆，低於前次有效筆數 {previous} 的 "
+                        f"{DEACTIVATE_MIN_RATIO:.0%}（門檻 {previous * DEACTIVATE_MIN_RATIO:.0f} 筆），拒絕停用缺漏個股"
+                    )
+                if previous == 0 and len(records) < DEACTIVATE_MIN_ABSOLUTE:
+                    raise SourceFormatError(
+                        f"{market} 本次解析 {len(records)} 筆，少於初次建庫下限 "
+                        f"{DEACTIVATE_MIN_ABSOLUTE} 筆，拒絕停用缺漏個股"
+                    )
+            loaded = upsert_stocks(conn, records)
+            deactivated = deactivate_missing(conn, market, {r.stock_id for r in records}) if deactivate else 0
+
+        run.rows = loaded
 
     logger.info(
         "刷新 %s 個股清單完成：載入 %d 筆，停用 %d 筆", market, loaded, deactivated
     )
     return StockLoadResult(market=market, records=loaded, deactivated=deactivated)
+
+
+def _write_calendar_year(
+    engine: Engine, year: int, days: Sequence[CalendarDay]
+) -> CalendarLoadResult:
+    """把已經 build 好的某年日曆寫入 trading_calendar，並記一列 etl_job_log。
+
+    job_name="trading_calendar"、target_key=f"{year:04d}"、run.rows = len(days)。
+    此 job 不會 skip，直接回傳 CalendarLoadResult。
+
+    Args:
+        engine: SQLAlchemy Engine
+        year: 年份
+        days: 該年每一天的 CalendarDay
+
+    Returns:
+        CalendarLoadResult
+    """
+    open_days = sum(1 for d in days if d.is_open)
+    closed_days = len(days) - open_days
+
+    with job_run(engine, "trading_calendar", target_key=f"{year:04d}") as run:
+        with engine.begin() as conn:
+            upsert_calendar(conn, days)
+        run.rows = len(days)
+
+    logger.info(
+        "刷新 %d 年交易日曆完成：共 %d 天，開市 %d 天，休市 %d 天",
+        year,
+        len(days),
+        open_days,
+        closed_days,
+    )
+    return CalendarLoadResult(
+        year=year, days=len(days), open_days=open_days, closed_days=closed_days
+    )
 
 
 def refresh_trading_calendar(
@@ -140,22 +184,7 @@ def refresh_trading_calendar(
     holidays = parse_holiday_schedule(payload)
     days = build_calendar(year, holidays)
 
-    open_days = sum(1 for d in days if d.is_open)
-    closed_days = len(days) - open_days
-
-    with engine.begin() as conn:
-        upsert_calendar(conn, days)
-
-    logger.info(
-        "刷新 %d 年交易日曆完成：共 %d 天，開市 %d 天，休市 %d 天",
-        year,
-        len(days),
-        open_days,
-        closed_days,
-    )
-    return CalendarLoadResult(
-        year=year, days=len(days), open_days=open_days, closed_days=closed_days
-    )
+    return _write_calendar_year(engine, year, days)
 
 
 def refresh_calendar_with_next_year(
@@ -182,28 +211,13 @@ def refresh_calendar_with_next_year(
     for y in [year, year + 1]:
         try:
             days = build_calendar(y, holidays)
-            open_days = sum(1 for d in days if d.is_open)
-            closed_days = len(days) - open_days
-
-            with engine.begin() as conn:
-                upsert_calendar(conn, days)
-
-            result = CalendarLoadResult(
-                year=y, days=len(days), open_days=open_days, closed_days=closed_days
-            )
-            results.append(result)
-            logger.info(
-                "刷新 %d 年交易日曆完成：共 %d 天，開市 %d 天，休市 %d 天",
-                y,
-                len(days),
-                open_days,
-                closed_days,
-            )
         except SourceFormatError:
             if y == year + 1:
                 logger.info("年份 %d 的交易日曆官方尚未公布，略過", y)
-            else:
-                raise
+                continue
+            raise
+
+        results.append(_write_calendar_year(engine, y, days))
 
     return results
 
@@ -225,52 +239,58 @@ def rebuild_calendar_from_index(
     Raises:
         SourceFormatError: 指數資料不足
     """
-    with engine.begin() as conn:
-        dates = index_trade_dates(conn, index_id, year)
+    days_total = 0
+    open_days = 0
+    closed_days = 0
 
-    if len(dates) < 200:
-        raise SourceFormatError(
-            f"{year} 年 {index_id} 只有 {len(dates)} 個交易日，"
-            f"不足以推算日曆，請先回補指數"
-        )
+    with job_run(engine, "calendar_from_index", target_key=f"{year:04d}") as run:
+        with engine.begin() as conn:
+            dates = index_trade_dates(conn, index_id, year)
 
-    # 產生該年每一天
-    all_days = []
-    current_date = date(year, 1, 1)
-    end_date = date(year, 12, 31)
-
-    while current_date <= end_date:
-        if current_date in dates:
-            day = CalendarDay(trade_date=current_date, is_open=True, note=None)
-        else:
-            day = CalendarDay(
-                trade_date=current_date, is_open=False, note="未開市（由指數回補推得）"
+        if len(dates) < 200:
+            raise SourceFormatError(
+                f"{year} 年 {index_id} 只有 {len(dates)} 個交易日，"
+                f"不足以推算日曆，請先回補指數"
             )
-        all_days.append(day)
-        current_date = date(
-            current_date.year, current_date.month, current_date.day
-        ) + timedelta(days=1)
 
-    # 寫入
-    open_days = sum(1 for d in all_days if d.is_open)
-    closed_days = len(all_days) - open_days
+        # 產生該年每一天
+        all_days = []
+        current_date = date(year, 1, 1)
+        end_date = date(year, 12, 31)
 
-    with engine.begin() as conn:
-        if overwrite:
-            upsert_calendar(conn, all_days)
-        else:
-            insert_calendar_if_absent(conn, all_days)
+        while current_date <= end_date:
+            if current_date in dates:
+                day = CalendarDay(trade_date=current_date, is_open=True, note=None)
+            else:
+                day = CalendarDay(
+                    trade_date=current_date, is_open=False, note="未開市（由指數回補推得）"
+                )
+            all_days.append(day)
+            current_date = current_date + timedelta(days=1)
+
+        # 寫入
+        days_total = len(all_days)
+        open_days = sum(1 for d in all_days if d.is_open)
+        closed_days = days_total - open_days
+
+        with engine.begin() as conn:
+            if overwrite:
+                upsert_calendar(conn, all_days)
+            else:
+                insert_calendar_if_absent(conn, all_days)
+
+        run.rows = days_total
 
     logger.info(
         "從 %s 指數反推 %d 年日曆完成：共 %d 天，開市 %d 天，休市 %d 天",
         index_id,
         year,
-        len(all_days),
+        days_total,
         open_days,
         closed_days,
     )
     return CalendarLoadResult(
-        year=year, days=len(all_days), open_days=open_days, closed_days=closed_days
+        year=year, days=days_total, open_days=open_days, closed_days=closed_days
     )
 
 

@@ -82,3 +82,82 @@ class AdjFactorRecord:
     reference_price: Decimal | None
     kind: str | None  # 除息 / 除權 / 除權息
     source: str = "TWSE"
+
+
+@dataclass(frozen=True)
+class InstitutionalRecord:
+    """三大法人買賣超紀錄（單位：股）。"""
+
+    stock_id: str
+    trade_date: date
+    foreign_buy: int
+    foreign_sell: int
+    foreign_net: int
+    trust_buy: int
+    trust_sell: int
+    trust_net: int
+    dealer_buy: int
+    dealer_sell: int
+    dealer_net: int
+    total_net: int
+    source: str  # "TWSE" 或 "TPEx"
+
+
+@dataclass(frozen=True)
+class MarginRecord:
+    """融資融券紀錄（單位：股）。"""
+
+    stock_id: str
+    trade_date: date
+    margin_buy: int
+    margin_sell: int
+    margin_redeem: int
+    margin_prev_balance: int
+    margin_balance: int
+    margin_limit: int | None
+    short_buy: int
+    short_sell: int
+    short_redeem: int
+    short_prev_balance: int
+    short_balance: int
+    short_limit: int | None
+    offset_amount: int
+    source: str
+
+
+@dataclass(frozen=True)
+class SblRecord:
+    """借券賣出紀錄（單位：股），寫進 margin_daily 的 sbl_* 欄位。"""
+
+    stock_id: str
+    trade_date: date
+    sbl_sell: int
+    sbl_balance: int
+    source: str = "TWSE"
+
+
+@dataclass(frozen=True)
+class ForeignHoldingRecord:
+    """外資持股紀錄。"""
+
+    stock_id: str
+    trade_date: date
+    issued_shares: int | None
+    holding_shares: int
+    available_shares: int | None
+    holding_ratio: Decimal | None
+    available_ratio: Decimal | None
+    limit_ratio: Decimal | None
+    source: str = "TWSE"
+
+
+@dataclass(frozen=True)
+class ShareholdingRecord:
+    """集保股權分散單一級距紀錄。"""
+
+    stock_id: str
+    week_date: date
+    level: int  # 1–17
+    holders: int
+    shares: int
+    ratio: Decimal

@@ -21,9 +21,11 @@ from twstock_etl.jobs import (
     load_adj_factors,
     load_daily_price,
     load_index_month,
+    load_chip_daily,
     rebuild_calendar_from_index,
 )
 from twstock_etl.loaders.job_log import has_successful_run, job_run
+from twstock_etl.chip_sources import get_chip_source
 
 logger = logging.getLogger(__name__)
 
@@ -710,6 +712,139 @@ def backfill_calendar(
         idx = i - 1
         if idx >= 0:
             summary.interrupted_at = f"{years[idx]:04d}"
+        logger.info("被使用者中斷")
+
+    elapsed = (datetime.now(TAIPEI) - start_time).total_seconds()
+    print(
+        f"完成 {summary.done}／跳過 {summary.skipped}／失敗 {summary.failed}，"
+        f"共寫入 {summary.rows} 筆，耗時 {_format_time(elapsed)}",
+        file=options.out,
+        flush=True,
+    )
+
+    return summary
+
+
+def backfill_chip(
+    engine: Engine,
+    kind: str,
+    market: str,
+    start: date,
+    end: date,
+    options: BackfillOptions,
+) -> BackfillSummary:
+    """逐交易日回補籌碼資料。"""
+    source = get_chip_source(kind, market)  # 組合不存在會拋 ValueError
+    days = trading_days(engine, start, end)
+    total = len(days)
+
+    summary = BackfillSummary(total=total, done=0, skipped=0, failed=0, rows=0)
+    start_time = datetime.now(TAIPEI)
+    limiter = RateLimiter(
+        options.sleep_seconds
+        if options.source_dir is None
+        else 0  # 離線模式不用等待
+    )
+
+    try:
+        for i, day in enumerate(days, start=1):
+            try:
+                # 檢查斷點續傳
+                with engine.begin() as conn:
+                    if (
+                        not options.force
+                        and has_successful_run(conn, source.job_name, target_date=day)
+                    ):
+                        summary.skipped += 1
+                        print(
+                            _progress_line(
+                                i,
+                                total,
+                                f"{day.isoformat()} {market} {kind}",
+                                skip_reason="已完成",
+                            ),
+                            file=options.out,
+                            flush=True,
+                        )
+                        continue
+
+                # 如果是 dry-run，只印不執行
+                if options.dry_run:
+                    print(
+                        _progress_line(
+                            i,
+                            total,
+                            f"{day.isoformat()} {market} {kind}",
+                            dry_run=True,
+                        ),
+                        file=options.out,
+                        flush=True,
+                    )
+                    summary.done += 1
+                    continue
+
+                # 限制速率（只在發 HTTP 前）
+                if options.source_dir is None:
+                    limiter.wait()
+
+                # 執行 job
+                payload = None
+                if options.source_dir is not None:
+                    # 離線模式：從檔案讀 JSON
+                    file_name = f"{market}_{kind}_{day.strftime('%Y%m%d')}.json"
+                    file_path = options.source_dir / file_name
+                    try:
+                        import json
+                        with open(file_path) as f:
+                            payload = json.load(f)
+                    except FileNotFoundError:
+                        raise FileNotFoundError(f"檔案不存在：{file_path}")
+
+                result = load_chip_daily(engine, kind, market, day, payload=payload)
+                summary.done += 1
+                summary.rows += result.rows
+
+                # 印進度
+                elapsed = (datetime.now(TAIPEI) - start_time).total_seconds()
+                avg_time = elapsed / summary.done
+                remaining = (total - i) * avg_time
+
+                print(
+                    _progress_line(
+                        i,
+                        total,
+                        f"{day.isoformat()} {market} {kind}",
+                        rows=result.rows,
+                        elapsed=elapsed,
+                        eta=remaining,
+                    ),
+                    file=options.out,
+                    flush=True,
+                )
+
+            except Exception as exc:
+                summary.failed += 1
+                error_msg = str(exc).split("\n")[0]  # 只取第一行
+
+                print(
+                    _progress_line(
+                        i,
+                        total,
+                        f"{day.isoformat()} {market} {kind}",
+                        fail_msg=error_msg,
+                    ),
+                    file=options.out,
+                    flush=True,
+                )
+
+                if summary.failed > options.max_failures:
+                    summary.interrupted_at = day.isoformat()
+                    raise BackfillAborted(
+                        f"失敗次數超過 {options.max_failures}，中止回補"
+                    )
+
+    except KeyboardInterrupt:
+        summary.interrupted_at = days[i - 1].isoformat()
         logger.info("被使用者中斷")
 
     elapsed = (datetime.now(TAIPEI) - start_time).total_seconds()

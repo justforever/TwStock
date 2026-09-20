@@ -405,3 +405,81 @@ def test_load_shareholding_skip_輸出格式(monkeypatch, capsys):
     assert result == 0
     out, err = capsys.readouterr()
     assert "skipped shareholding week=2026-09-18 reason=已完成，略過" in out
+
+
+def test_load_chip_輸出格式(monkeypatch, capsys):
+    """測試 load-chip 輸出格式。"""
+    from datetime import date
+    from twstock_etl.jobs import ChipJobResult
+
+    # monkeypatch get_engine
+    mock_engine = object()
+    monkeypatch.setattr("twstock_etl.cli.get_engine", lambda: mock_engine)
+
+    # monkeypatch load_chip_daily
+    def mock_load_chip_daily(engine, kind, market, trade_date, **kwargs):
+        return ChipJobResult(
+            kind=kind,
+            market=market,
+            trade_date=trade_date,
+            rows=10,
+            skipped_unknown=1,
+            skip_reason=None,
+        )
+
+    monkeypatch.setattr("twstock_etl.cli.load_chip_daily", mock_load_chip_daily)
+
+    result = main(
+        ["load-chip", "--kind", "institutional", "--market", "TWSE", "--date", "2026-09-21"]
+    )
+
+    assert result == 0
+    out, err = capsys.readouterr()
+    assert "loaded kind=institutional market=TWSE date=2026-09-21 rows=10 skipped_unknown=1" in out
+
+
+def test_load_chip_skip_輸出格式(monkeypatch, capsys):
+    """測試 load-chip skip 輸出格式。"""
+    from datetime import date
+    from twstock_etl.jobs import ChipJobResult
+
+    # monkeypatch get_engine
+    mock_engine = object()
+    monkeypatch.setattr("twstock_etl.cli.get_engine", lambda: mock_engine)
+
+    # monkeypatch load_chip_daily
+    def mock_load_chip_daily(engine, kind, market, trade_date, **kwargs):
+        return ChipJobResult(
+            kind=kind,
+            market=market,
+            trade_date=trade_date,
+            rows=0,
+            skipped_unknown=0,
+            skip_reason="已在 etl_job_log 載入成功",
+        )
+
+    monkeypatch.setattr("twstock_etl.cli.load_chip_daily", mock_load_chip_daily)
+
+    result = main(
+        ["load-chip", "--kind", "institutional", "--market", "TWSE", "--date", "2026-09-21"]
+    )
+
+    assert result == 0
+    out, err = capsys.readouterr()
+    assert "skipped kind=institutional market=TWSE date=2026-09-21 reason=已在 etl_job_log 載入成功" in out
+
+
+def test_load_chip_invalid_combo(monkeypatch, capsys):
+    """測試 load-chip 無效的 kind/market 組合。"""
+    # monkeypatch get_engine
+    mock_engine = object()
+    monkeypatch.setattr("twstock_etl.cli.get_engine", lambda: mock_engine)
+
+    result = main(
+        ["load-chip", "--kind", "sbl", "--market", "TPEx", "--date", "2026-09-21"]
+    )
+
+    # 應該返回 exit code 2
+    assert result == 2
+    out, err = capsys.readouterr()
+    assert "error:" in err

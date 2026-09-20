@@ -37,6 +37,13 @@ from twstock_etl.sources.twse_holiday import (
 )
 from twstock_etl.sources.twse_index import fetch_taiex_month, parse_taiex_month
 from twstock_etl.sources.twse_price import fetch_twse_daily, parse_twse_daily
+from twstock_etl.chip_sources import get_chip_source
+from twstock_etl.loaders.chip import (
+    upsert_foreign_holding,
+    upsert_institutional,
+    upsert_margin,
+    upsert_sbl,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -588,6 +595,73 @@ def load_shareholding(
 
     return ShareholdingJobResult(
         week_date=week_date,
+        rows=rows,
+        skipped_unknown=skipped_unknown,
+        skip_reason=run.note,
+    )
+
+
+@dataclass(frozen=True)
+class ChipJobResult:
+    """單一交易日的籌碼載入結果。"""
+
+    kind: str
+    market: str
+    trade_date: date
+    rows: int
+    skipped_unknown: int
+    skip_reason: str | None = None
+
+
+def load_chip_daily(
+    engine: Engine,
+    kind: str,
+    market: str,
+    trade_date: date,
+    *,
+    payload: dict | None = None,
+    client: httpx.Client | None = None,
+    check_calendar: bool = True,
+    force: bool = False,
+) -> ChipJobResult:
+    """抓（或用傳入的）單一交易日的某類籌碼資料並寫入對應資料表，全程記 etl_job_log。
+
+    Returns:
+        ChipJobResult；被略過時 rows=0、skipped_unknown=0、skip_reason 為略過原因
+
+    Raises:
+        ValueError: kind × market 組合不存在
+    """
+    source = get_chip_source(kind, market)  # 組合不存在會在進 job_run 之前就拋 ValueError
+    rows = 0
+    skipped_unknown = 0
+
+    with job_run(engine, source.job_name, target_date=trade_date) as run:
+        with engine.begin() as conn:
+            if not force and has_successful_run(conn, source.job_name, target_date=trade_date):
+                run.skip("已完成，略過")
+            if check_calendar:
+                is_open = is_trading_day(conn, trade_date)
+                if is_open is False:
+                    run.skip("非開市日")
+                elif is_open is None:
+                    logger.warning("日曆缺少 %s", trade_date)
+
+        if payload is None:
+            payload = source.fetch(trade_date, client)
+
+        records = source.parse(payload, trade_date)
+
+        with engine.begin() as conn:
+            upsert_result = source.upsert(conn, records)
+        rows = upsert_result.written
+        skipped_unknown = upsert_result.skipped_unknown
+        run.rows = rows
+
+    return ChipJobResult(
+        kind=kind,
+        market=market,
+        trade_date=trade_date,
         rows=rows,
         skipped_unknown=skipped_unknown,
         skip_reason=run.note,

@@ -20,6 +20,12 @@ def test_scheduler_jobs():
         "index_daily_taiex",
         "adj_factor_twse",
         "shareholding_tdcc",
+        "institutional_twse",
+        "institutional_tpex",
+        "foreign_holding_twse",
+        "margin_twse",
+        "margin_tpex",
+        "sbl_twse",
     }
     assert jobs == expected
 
@@ -225,4 +231,80 @@ def test_run_shareholding_job_略過時記_info_不記_exception(monkeypatch, ca
         run_shareholding_job(engine)
 
     assert "集保股權分散 略過：已完成，略過" in caplog.text
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+def test_scheduler_has_chip_jobs():
+    """測試排程器包含所有籌碼 job。"""
+    engine = create_engine("postgresql+psycopg://x:x@127.0.0.1:1/x")
+    scheduler = build_scheduler(engine)
+
+    jobs = {j.id for j in scheduler.get_jobs()}
+    chip_jobs = {
+        "institutional_twse",
+        "institutional_tpex",
+        "foreign_holding_twse",
+        "margin_twse",
+        "margin_tpex",
+        "sbl_twse",
+    }
+    # 籌碼 job 應該都在 jobs 中
+    assert chip_jobs.issubset(jobs)
+
+
+def test_run_chip_job_success(monkeypatch, caplog):
+    """測試籌碼 job 成功路徑的 log 輸出。"""
+    import logging
+    from datetime import date
+
+    from twstock_etl.jobs import ChipJobResult
+    from twstock_etl.scheduler import run_chip_job
+
+    def fake_load_chip(engine, kind, market, trade_date, **kwargs):
+        return ChipJobResult(
+            kind=kind,
+            market=market,
+            trade_date=date(2026, 9, 21),
+            rows=5,
+            skipped_unknown=0,
+            skip_reason=None,
+        )
+
+    monkeypatch.setattr("twstock_etl.scheduler.load_chip_daily", fake_load_chip)
+
+    engine = create_engine("postgresql+psycopg://x:x@127.0.0.1:1/x")
+    with caplog.at_level(logging.INFO, logger="twstock_etl.scheduler"):
+        run_chip_job(engine, "institutional", "TWSE")
+
+    assert "上市三大法人 成功載入 5 筆" in caplog.text
+    assert "Logging error" not in caplog.text
+    assert "TypeError" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_run_chip_job_skip(monkeypatch, caplog):
+    """測試籌碼 job 被略過時的 log 輸出。"""
+    import logging
+    from datetime import date
+
+    from twstock_etl.jobs import ChipJobResult
+    from twstock_etl.scheduler import run_chip_job
+
+    def fake_load_chip(engine, kind, market, trade_date, **kwargs):
+        return ChipJobResult(
+            kind=kind,
+            market=market,
+            trade_date=date(2026, 9, 21),
+            rows=0,
+            skipped_unknown=0,
+            skip_reason="已在 etl_job_log 載入成功",
+        )
+
+    monkeypatch.setattr("twstock_etl.scheduler.load_chip_daily", fake_load_chip)
+
+    engine = create_engine("postgresql+psycopg://x:x@127.0.0.1:1/x")
+    with caplog.at_level(logging.INFO, logger="twstock_etl.scheduler"):
+        run_chip_job(engine, "institutional", "TWSE")
+
+    assert "上市三大法人 略過：已在 etl_job_log 載入成功" in caplog.text
     assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []

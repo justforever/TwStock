@@ -10,16 +10,29 @@ from sqlalchemy import Engine
 
 from twstock_etl.jobs import (
     load_adj_factors,
+    load_chip_daily,
     load_daily_price,
     load_index_month,
     load_shareholding,
     refresh_calendar_with_next_year,
     refresh_stock_list,
 )
+from twstock_etl.chip_sources import get_chip_source
 
 logger = logging.getLogger(__name__)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
+
+# 籌碼排程（台北時間）：(kind, market, 小時清單, 分鐘)
+# 三大法人約 16:00–17:00 公布、外資持股盤後、融資融券與借券約 21:00 之後，各排三次靠 etl_job_log 去重
+CHIP_SCHEDULE: tuple[tuple[str, str, str, int], ...] = (
+    ("institutional", "TWSE", "16,18,20", 30),
+    ("institutional", "TPEx", "16,18,20", 40),
+    ("foreign", "TWSE", "17,19,21", 0),
+    ("margin", "TWSE", "21,22,23", 30),
+    ("margin", "TPEx", "21,22,23", 40),
+    ("sbl", "TWSE", "21,22,23", 50),
+)
 
 
 def _log_job_outcome(what: str, result) -> None:
@@ -130,6 +143,24 @@ def run_shareholding_job(engine: Engine) -> None:
         logger.exception("載入集保股權分散失敗")
 
 
+def run_chip_job(engine: Engine, kind: str, market: str) -> None:
+    """載入單日某類籌碼；失敗只記 log。
+
+    Args:
+        engine: SQLAlchemy Engine
+        kind: 籌碼種類（institutional / margin / sbl / foreign）
+        market: 市場別（TWSE / TPEx）
+    """
+    try:
+        today = datetime.now(TAIPEI).date()
+        _log_job_outcome(
+            f"{today} {get_chip_source(kind, market).label}",
+            load_chip_daily(engine, kind, market, today),
+        )
+    except Exception:
+        logger.exception("載入 %s %s 籌碼失敗", market, kind)
+
+
 def build_scheduler(engine: Engine) -> BlockingScheduler:
     """建立（未啟動的）排程器並註冊所有 job。
 
@@ -220,5 +251,17 @@ def build_scheduler(engine: Engine) -> BlockingScheduler:
         max_instances=1,
         misfire_grace_time=21600,
     )
+
+    # 籌碼資料（institutional / margin / sbl / foreign）
+    for kind, market, hours, minute in CHIP_SCHEDULE:
+        scheduler.add_job(
+            run_chip_job,
+            trigger=CronTrigger(hour=hours, minute=minute, timezone=TAIPEI),
+            args=[engine, kind, market],
+            id=get_chip_source(kind, market).job_name,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
 
     return scheduler

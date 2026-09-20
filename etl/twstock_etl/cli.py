@@ -20,6 +20,7 @@ from twstock_etl.backfill import (
     backfill_exright,
     backfill_index,
     backfill_prices,
+    backfill_chip,
 )
 from twstock_etl.errors import SourceFormatError
 from twstock_etl.jobs import (
@@ -27,6 +28,7 @@ from twstock_etl.jobs import (
     load_daily_price,
     load_index_month,
     load_shareholding,
+    load_chip_daily,
     rebuild_calendar_from_index,
     refresh_stock_list,
     refresh_trading_calendar,
@@ -46,6 +48,8 @@ BACKFILL_EPILOG = """建議順序（第一次回補 5 年）：
   6. python -m twstock_etl.cli backfill price    --market TWSE --from 2021-01-04 --to 2026-09-18
   7. python -m twstock_etl.cli backfill price    --market TPEx --from 2021-01-04 --to 2026-09-18
   8. python -m twstock_etl.cli backfill exright  --from 2021-01-01 --to 2026-09-18
+  9. python -m twstock_etl.cli backfill chip --kind institutional --market TWSE --from … --to …
+  10. python -m twstock_etl.cli backfill chip --kind margin        --market TWSE --from … --to …
 
 步驟 6、7 各約 1,200 次請求，--sleep 3 約需 1 小時。可以隨時 Ctrl-C，再執行會從中斷處繼續。
 """
@@ -192,6 +196,41 @@ def main(argv: list[str] | None = None) -> int:
         help="強制重抓（跳過斷點續傳檢查）",
     )
 
+    # load-chip 子指令
+    load_chip_parser = subparsers.add_parser("load-chip", help="載入單日籌碼資料")
+    load_chip_parser.add_argument(
+        "--kind",
+        required=True,
+        choices=["institutional", "margin", "sbl", "foreign"],
+        help="籌碼種類",
+    )
+    load_chip_parser.add_argument(
+        "--market",
+        required=True,
+        choices=["TWSE", "TPEx"],
+        help="市場別",
+    )
+    load_chip_parser.add_argument(
+        "--date",
+        type=_parse_date,
+        help="交易日（預設：台北時間今天）",
+    )
+    load_chip_parser.add_argument(
+        "--file",
+        type=Path,
+        help="本機 JSON 檔案路徑（UTF-8）",
+    )
+    load_chip_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="強制重抓（跳過斷點續傳檢查）",
+    )
+    load_chip_parser.add_argument(
+        "--no-calendar-check",
+        action="store_true",
+        help="不檢查交易日曆",
+    )
+
     # rebuild-calendar 子指令
     rebuild_calendar_parser = subparsers.add_parser(
         "rebuild-calendar", help="由指數反推交易日曆"
@@ -315,6 +354,36 @@ def main(argv: list[str] | None = None) -> int:
     calendar_parser.add_argument("--to-year", type=int, required=True, help="結束年份（含）")
     _add_backfill_common_options(calendar_parser)
 
+    # backfill chip 子子指令
+    chip_parser = backfill_sub.add_parser("chip", help="回補籌碼資料")
+    chip_parser.add_argument(
+        "--kind",
+        required=True,
+        choices=["institutional", "margin", "sbl", "foreign"],
+        help="籌碼種類",
+    )
+    chip_parser.add_argument(
+        "--market",
+        required=True,
+        choices=["TWSE", "TPEx"],
+        help="市場別",
+    )
+    chip_parser.add_argument(
+        "--from",
+        type=_parse_date,
+        required=True,
+        dest="start",
+        help="起始日期（YYYY-MM-DD，含）",
+    )
+    chip_parser.add_argument(
+        "--to",
+        type=_parse_date,
+        required=True,
+        dest="end",
+        help="結束日期（YYYY-MM-DD，含）",
+    )
+    _add_backfill_common_options(chip_parser)
+
     # scheduler 子指令
     subparsers.add_parser("scheduler", help="啟動排程器")
 
@@ -333,6 +402,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_load_exright(args)
         elif args.command == "load-shareholding":
             return _cmd_load_shareholding(args)
+        elif args.command == "load-chip":
+            return _cmd_load_chip(args)
         elif args.command == "rebuild-calendar":
             return _cmd_rebuild_calendar(args)
         elif args.command == "backfill":
@@ -507,6 +578,46 @@ def _cmd_load_shareholding(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_load_chip(args: argparse.Namespace) -> int:
+    """load-chip 子指令實作。"""
+    trade_date = args.date
+    if trade_date is None:
+        trade_date = datetime.now(TAIPEI).date()
+
+    payload = None
+    if args.file:
+        payload = json.loads(args.file.read_text(encoding="utf-8"))
+
+    engine = get_engine()
+
+    try:
+        result = load_chip_daily(
+            engine,
+            args.kind,
+            args.market,
+            trade_date,
+            payload=payload,
+            check_calendar=not args.no_calendar_check,
+            force=args.force,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if result.skip_reason is not None:
+        print(
+            f"skipped kind={args.kind} market={args.market} date={trade_date} "
+            f"reason={result.skip_reason}"
+        )
+    else:
+        print(
+            f"loaded kind={args.kind} market={args.market} date={trade_date} "
+            f"rows={result.rows} skipped_unknown={result.skipped_unknown}"
+        )
+
+    return 0
+
+
 def _cmd_rebuild_calendar(args: argparse.Namespace) -> int:
     """rebuild-calendar 子指令實作。"""
     engine = get_engine()
@@ -554,6 +665,8 @@ def _cmd_backfill(args: argparse.Namespace) -> int:
             summary = backfill_exright(engine, args.start, args.end, options)
         elif args.backfill_command == "calendar":
             summary = backfill_calendar(engine, args.from_year, args.to_year, options)
+        elif args.backfill_command == "chip":
+            summary = backfill_chip(engine, args.kind, args.market, args.start, args.end, options)
         else:
             return 1
 

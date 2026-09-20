@@ -12,6 +12,7 @@ from twstock_etl.jobs import (
     load_adj_factors,
     load_daily_price,
     load_index_month,
+    load_shareholding,
     refresh_calendar_with_next_year,
     refresh_stock_list,
 )
@@ -121,6 +122,14 @@ def run_adj_factors_job(engine: Engine) -> None:
         logger.exception("載入除權除息失敗")
 
 
+def run_shareholding_job(engine: Engine) -> None:
+    """抓集保股權分散（官方只留最新一週，漏抓補不回來）；失敗只記 log。"""
+    try:
+        _log_job_outcome("集保股權分散", load_shareholding(engine))
+    except Exception:
+        logger.exception("載入集保股權分散失敗")
+
+
 def build_scheduler(engine: Engine) -> BlockingScheduler:
     """建立（未啟動的）排程器並註冊所有 job。
 
@@ -198,6 +207,18 @@ def build_scheduler(engine: Engine) -> BlockingScheduler:
         coalesce=True,
         max_instances=1,
         misfire_grace_time=3600,
+    )
+
+    # 集保股權分散：每週六、日 10:00 與 16:00 台北時間各試一次
+    # （官方只留最新一週，漏抓補不回來，所以一週排四次；同一週靠 etl_job_log 去重）
+    scheduler.add_job(
+        run_shareholding_job,
+        trigger=CronTrigger(day_of_week="sat,sun", hour="10,16", minute=0, timezone=TAIPEI),
+        args=[engine],
+        id="shareholding_tdcc",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=21600,
     )
 
     return scheduler

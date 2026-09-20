@@ -26,6 +26,7 @@ from twstock_etl.jobs import (
     load_adj_factors,
     load_daily_price,
     load_index_month,
+    load_shareholding,
     rebuild_calendar_from_index,
     refresh_stock_list,
     refresh_trading_calendar,
@@ -176,6 +177,21 @@ def main(argv: list[str] | None = None) -> int:
         help="強制重抓（跳過斷點續傳檢查）",
     )
 
+    # load-shareholding 子指令
+    load_shareholding_parser = subparsers.add_parser(
+        "load-shareholding", help="載入集保股權分散"
+    )
+    load_shareholding_parser.add_argument(
+        "--file",
+        type=Path,
+        help="本機 CSV 檔案路徑（UTF-8）",
+    )
+    load_shareholding_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="強制重抓（跳過斷點續傳檢查）",
+    )
+
     # rebuild-calendar 子指令
     rebuild_calendar_parser = subparsers.add_parser(
         "rebuild-calendar", help="由指數反推交易日曆"
@@ -315,6 +331,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_load_index(args)
         elif args.command == "load-exright":
             return _cmd_load_exright(args)
+        elif args.command == "load-shareholding":
+            return _cmd_load_shareholding(args)
         elif args.command == "rebuild-calendar":
             return _cmd_rebuild_calendar(args)
         elif args.command == "backfill":
@@ -464,6 +482,27 @@ def _cmd_load_exright(args: argparse.Namespace) -> int:
         print(f"skipped exright from={start} to={end} reason={result.skip_reason}")
     else:
         print(f"loaded exright from={start} to={end} rows={result.rows}")
+
+    return 0
+
+
+def _cmd_load_shareholding(args: argparse.Namespace) -> int:
+    """load-shareholding 子指令實作。"""
+    csv_text = None
+    if args.file:
+        csv_text = args.file.read_text(encoding="utf-8")
+
+    engine = get_engine()
+    result = load_shareholding(engine, csv_text=csv_text, force=args.force)
+
+    week = result.week_date.isoformat() if result.week_date else "-"
+    if result.skip_reason is not None:
+        print(f"skipped shareholding week={week} reason={result.skip_reason}")
+    else:
+        print(
+            f"loaded shareholding week={week} rows={result.rows} "
+            f"skipped_unknown={result.skipped_unknown}"
+        )
 
     return 0
 

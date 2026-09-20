@@ -532,3 +532,63 @@ def load_adj_factors(
         run.rows = rows
 
     return AdjFactorJobResult(start=start, end=end, rows=rows, skip_reason=run.note)
+
+
+@dataclass(frozen=True)
+class ShareholdingJobResult:
+    """集保股權分散載入結果。"""
+
+    week_date: date | None
+    rows: int
+    skipped_unknown: int
+    skip_reason: str | None = None
+
+
+def load_shareholding(
+    engine: Engine,
+    *,
+    csv_text: str | None = None,
+    client: httpx.Client | None = None,
+    force: bool = False,
+) -> ShareholdingJobResult:
+    """抓（或用傳入的）集保股權分散 CSV 並寫入 shareholding_dist，全程記 etl_job_log。
+
+    官方只保留最新一週，所以沒有日期參數，也沒有回補；target_date 由資料裡的
+    「資料日期」決定（D-033）。
+
+    Returns:
+        ShareholdingJobResult；被略過時 rows=0、skipped_unknown=0、skip_reason 為略過原因
+    """
+    from twstock_etl.loaders.shareholding import upsert_shareholding
+    from twstock_etl.sources.tdcc import fetch_tdcc_shareholding, parse_tdcc_shareholding
+
+    job_name = "shareholding_tdcc"
+    week_date: date | None = None
+    rows = 0
+    skipped_unknown = 0
+
+    with job_run(engine, job_name) as run:
+        if csv_text is None:
+            csv_text = fetch_tdcc_shareholding(client)
+
+        records = parse_tdcc_shareholding(csv_text)
+        week_date = max(r.week_date for r in records)
+        run.set_target(target_date=week_date)
+
+        with engine.begin() as conn:
+            if not force and has_successful_run(conn, job_name, target_date=week_date):
+                run.skip("已完成，略過")
+
+        latest = [r for r in records if r.week_date == week_date]
+        with engine.begin() as conn:
+            upsert_result = upsert_shareholding(conn, latest)
+        rows = upsert_result.written
+        skipped_unknown = upsert_result.skipped_unknown
+        run.rows = rows
+
+    return ShareholdingJobResult(
+        week_date=week_date,
+        rows=rows,
+        skipped_unknown=skipped_unknown,
+        skip_reason=run.note,
+    )

@@ -28,10 +28,37 @@ class JobRun:
     job_name: str
     rows: int = 0  # 呼叫端執行完把筆數寫回來
     note: str | None = None  # 跳過原因，寫進 error 欄位
+    target_date: date | None = None
+    target_key: str | None = None
+    engine: Engine | None = None  # 由 job_run() 填入，供 set_target() 用
 
     def skip(self, reason: str) -> NoReturn:
         """中止此次 job 並記為 skipped。"""
         raise JobSkipped(reason)
+
+    def set_target(
+        self, *, target_date: date | None = None, target_key: str | None = None
+    ) -> None:
+        """在 job 執行中補記 target_date / target_key。
+
+        給「目標要解析完資料才知道」的 job 用（例如集保只有最新一週，
+        週五日期寫在檔案裡）。會立刻 UPDATE etl_job_log 那一列。
+
+        Raises:
+            RuntimeError: 這個 JobRun 沒有 engine
+        """
+        if self.engine is None:
+            raise RuntimeError("JobRun 沒有 engine，無法補記 target")
+        if target_date is not None:
+            self.target_date = target_date
+        if target_key is not None:
+            self.target_key = target_key
+        with self.engine.begin() as conn:
+            conn.execute(
+                etl_job_log.update()
+                .where(etl_job_log.c.job_id == self.job_id)
+                .values(target_date=self.target_date, target_key=self.target_key)
+            )
 
 
 @contextmanager
@@ -60,7 +87,13 @@ def job_run(
         result = conn.execute(stmt)
         job_id = result.inserted_primary_key[0]
 
-    run = JobRun(job_id=job_id, job_name=job_name)
+    run = JobRun(
+        job_id=job_id,
+        job_name=job_name,
+        target_date=target_date,
+        target_key=target_key,
+        engine=engine,
+    )
 
     try:
         yield run

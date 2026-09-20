@@ -19,6 +19,7 @@ def test_scheduler_jobs():
         "daily_price_tpex",
         "index_daily_taiex",
         "adj_factor_twse",
+        "shareholding_tdcc",
     }
     assert jobs == expected
 
@@ -188,3 +189,40 @@ def test_run_adj_factors_job_success(monkeypatch, caplog):
     assert "Logging error" not in caplog.text
     assert "TypeError" not in caplog.text
     assert "Traceback" not in caplog.text
+
+
+def test_build_scheduler_有集保_job():
+    """測試 build_scheduler 有集保 job。"""
+    engine = create_engine("postgresql+psycopg://x:x@127.0.0.1:1/x")
+    scheduler = build_scheduler(engine)
+
+    job = scheduler.get_job("shareholding_tdcc")
+    assert job is not None
+    assert isinstance(job.trigger, CronTrigger)
+    assert "sat" in str(job.trigger)
+    assert "sun" in str(job.trigger)
+
+
+def test_run_shareholding_job_略過時記_info_不記_exception(monkeypatch, caplog):
+    """測試集保 job 略過時記 info 不記 exception。"""
+    import logging
+    from datetime import date
+    from twstock_etl.scheduler import run_shareholding_job
+    from twstock_etl.jobs import ShareholdingJobResult
+
+    def fake_load(engine, **kwargs):
+        return ShareholdingJobResult(
+            week_date=date(2026, 9, 18),
+            rows=0,
+            skipped_unknown=0,
+            skip_reason="已完成，略過",
+        )
+
+    monkeypatch.setattr("twstock_etl.scheduler.load_shareholding", fake_load)
+
+    engine = create_engine("postgresql+psycopg://x:x@127.0.0.1:1/x")
+    with caplog.at_level(logging.INFO, logger="twstock_etl.scheduler"):
+        run_shareholding_job(engine)
+
+    assert "集保股權分散 略過：已完成，略過" in caplog.text
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []

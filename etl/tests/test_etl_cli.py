@@ -347,3 +347,61 @@ def test_missing_database_url(monkeypatch, capsys):
     assert "DATABASE_URL" in err
 
     get_engine.cache_clear()
+
+
+def test_load_shareholding_輸出格式(monkeypatch, capsys):
+    """測試 load-shareholding 輸出格式。"""
+    from datetime import date
+    from twstock_etl.jobs import ShareholdingJobResult
+
+    # monkeypatch get_engine
+    mock_engine = object()
+    monkeypatch.setattr("twstock_etl.cli.get_engine", lambda: mock_engine)
+
+    # monkeypatch load_shareholding
+    def mock_load_shareholding(engine, *, csv_text=None, force=False):
+        return ShareholdingJobResult(
+            week_date=date(2026, 9, 18),
+            rows=24,
+            skipped_unknown=1,
+            skip_reason=None,
+        )
+
+    monkeypatch.setattr("twstock_etl.cli.load_shareholding", mock_load_shareholding)
+
+    result = main(
+        ["load-shareholding", "--file", _fixture_path("tdcc_shareholding_20260918.csv")]
+    )
+
+    assert result == 0
+    out, err = capsys.readouterr()
+    assert "loaded shareholding week=2026-09-18 rows=24 skipped_unknown=1" in out
+
+
+def test_load_shareholding_skip_輸出格式(monkeypatch, capsys):
+    """測試 load-shareholding skip 輸出格式。"""
+    from datetime import date
+    from twstock_etl.jobs import ShareholdingJobResult
+
+    # monkeypatch get_engine
+    mock_engine = object()
+    monkeypatch.setattr("twstock_etl.cli.get_engine", lambda: mock_engine)
+
+    # monkeypatch load_shareholding
+    def mock_load_shareholding(engine, *, csv_text=None, force=False):
+        return ShareholdingJobResult(
+            week_date=date(2026, 9, 18),
+            rows=0,
+            skipped_unknown=0,
+            skip_reason="已完成，略過",
+        )
+
+    monkeypatch.setattr("twstock_etl.cli.load_shareholding", mock_load_shareholding)
+
+    result = main(
+        ["load-shareholding", "--file", _fixture_path("tdcc_shareholding_20260918.csv")]
+    )
+
+    assert result == 0
+    out, err = capsys.readouterr()
+    assert "skipped shareholding week=2026-09-18 reason=已完成，略過" in out

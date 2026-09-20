@@ -171,3 +171,26 @@ def test_latest_run_not_found(clean_db):
         record = latest_run(conn, "nonexistent_job")
 
     assert record is None
+
+
+def test_set_target_會更新_etl_job_log(clean_db):
+    """測試 set_target 會更新 etl_job_log。"""
+    with job_run(clean_db, "shareholding_tdcc") as run:
+        run.set_target(target_date=date(2026, 9, 18))
+
+    # 驗證 DB
+    with clean_db.begin() as conn:
+        record = conn.execute(select(etl_job_log)).first()
+
+    assert record.job_name == "shareholding_tdcc"
+    assert record.target_date == date(2026, 9, 18)
+    assert record.status == "success"
+
+
+def test_set_target_沒有_engine_拋_RuntimeError(clean_db):
+    """測試 set_target 沒有 engine 拋 RuntimeError。"""
+    from twstock_etl.loaders.job_log import JobRun
+
+    run = JobRun(job_id=1, job_name="test_job")
+    with pytest.raises(RuntimeError, match="沒有 engine"):
+        run.set_target(target_date=date(2026, 9, 18))

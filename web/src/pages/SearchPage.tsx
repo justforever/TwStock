@@ -10,6 +10,7 @@ export default function SearchPage() {
   const inputRef = useRef<HTMLInputElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const timeoutRef = useRef<number | null>(null)
+  const reqIdRef = useRef(0)
 
   // 処理搜索
   const performSearch = async (q: string) => {
@@ -18,6 +19,8 @@ export default function SearchPage() {
       setError(null)
       return
     }
+
+    const myId = ++reqIdRef.current
 
     setLoading(true)
     setError(null)
@@ -31,20 +34,26 @@ export default function SearchPage() {
 
     try {
       const result = await searchStocks(q, abortControllerRef.current.signal)
-      setResponse(result)
-    } catch (err) {
-      if (err instanceof Error) {
-        if (err.name === 'AbortError') {
-          // 忽略中止錯誤
-          return
-        }
-        setError(err)
-      } else {
-        setError(new Error('未知錯誤'))
+      if (myId === reqIdRef.current) {
+        setResponse(result)
       }
-      setResponse(null)
+    } catch (err) {
+      if (myId === reqIdRef.current) {
+        if (err instanceof Error) {
+          if (err.name === 'AbortError') {
+            // 忽略中止錯誤
+            return
+          }
+          setError(err)
+        } else {
+          setError(new Error('未知錯誤'))
+        }
+        setResponse(null)
+      }
     } finally {
-      setLoading(false)
+      if (myId === reqIdRef.current) {
+        setLoading(false)
+      }
     }
   }
 
@@ -76,10 +85,10 @@ export default function SearchPage() {
 
   // 快捷鍵處理
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (
-      e.key === '/' &&
-      document.activeElement !== document.querySelector('input[type="search"]')
-    ) {
+    const el = document.activeElement as HTMLElement | null
+    const tag = el?.tagName
+    const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable === true
+    if (e.key === '/' && !typing) {
       e.preventDefault()
       inputRef.current?.focus()
     }

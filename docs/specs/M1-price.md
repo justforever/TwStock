@@ -3497,7 +3497,7 @@ cd /home/claude/TwStock && docker compose -f deploy/docker-compose.yml --env-fil
 | T1-4d | `jobs.py`：個股清單／交易日曆／指數反推日曆補 `etl_job_log` | T1-4c | DONE | `docs/reviews/T1-4d.md` |
 | T1-5 | 回補腳本：速率限制、斷點續傳、進度輸出 | T1-4a～T1-4d 全數 DONE | DONE | 審查報告 `docs/reviews/T1-5.md`（第 3 輪 APPROVE）；Coder 自述見 `docs/reviews/T1-5-coder-notes.md` |
 | T1-6 | API：個股明細、日 K（含還原）、指數、ETL 狀態 | T1-5（驗收要用回補後的資料） | DONE | 審查報告 `docs/reviews/T1-6.md`（第 1 輪 APPROVE） |
-| T1-7 | Web：個股 K 線頁、ETL 狀態頁，與 M1 整合驗收 | T1-6 | TODO | — |
+| T1-7 | Web：個股 K 線頁、ETL 狀態頁，與 M1 整合驗收 | T1-6 | DONE | 審查報告 `docs/reviews/T1-7.md`（第 2 輪 APPROVE）|
 
 > **狀態表修正紀錄（2026-09-19，Architect）**：上一輪流程中 Reviewer 誤把主對話裡使用者詢問進度的訊息當成中止指令，
 > T1-4c、T1-4d、T1-5、T1-6 都沒有真的審查，狀態表卻被標成 BLOCKED。

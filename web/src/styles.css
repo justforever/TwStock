@@ -23,15 +23,22 @@ header {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
 header a {
-  display: block;
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 0 1rem;
   color: #0066cc;
   text-decoration: none;
   font-size: 1.25rem;
   font-weight: 600;
+  margin: 0 1rem;
+}
+
+header a:first-child {
+  margin-left: 0;
 }
 
 header a:hover {
@@ -116,4 +123,175 @@ li span {
 h1 {
   margin-bottom: 1rem;
   font-size: 1.75rem;
+}
+
+h2 {
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  font-size: 1.5rem;
+}
+
+.stock-header {
+  background-color: #fff;
+  padding: 1.5rem;
+  border-radius: 4px;
+  margin-bottom: 1.5rem;
+  border: 1px solid #e0e0e0;
+}
+
+.stock-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.stock-header p {
+  margin: 0.5rem 0;
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.stock-latest {
+  display: flex;
+  gap: 2rem;
+  margin-top: 1rem;
+}
+
+.stock-latest p {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.stock-latest p.up {
+  color: #d32f2f;
+}
+
+.stock-latest p.down {
+  color: #2e7d32;
+}
+
+.stock-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background-color: #fff;
+  border-radius: 4px;
+  border: 1px solid #e0e0e0;
+}
+
+.range-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.range-buttons button {
+  padding: 0.5rem 1rem;
+  border: 1px solid #ddd;
+  background-color: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.range-buttons button[aria-pressed="true"] {
+  background-color: #0066cc;
+  color: #fff;
+  border-color: #0066cc;
+}
+
+.range-buttons button:hover {
+  border-color: #0066cc;
+}
+
+.stock-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.stock-toolbar input[type="checkbox"] {
+  cursor: pointer;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 1.5rem;
+}
+
+table th {
+  background-color: #f5f5f5;
+  padding: 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 2px solid #e0e0e0;
+  font-size: 0.9rem;
+}
+
+table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid #e0e0e0;
+  font-size: 0.9rem;
+}
+
+table tr:last-child td {
+  border-bottom: none;
+}
+
+table tr:hover {
+  background-color: #fafafa;
+}
+
+.status {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 3px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.status-success {
+  background-color: #c8e6c9;
+  color: #1b5e20;
+}
+
+.status-failed {
+  background-color: #ffcdd2;
+  color: #b71c1c;
+}
+
+.status-running {
+  background-color: #bbdefb;
+  color: #0d47a1;
+}
+
+.status-skipped {
+  background-color: #eeeeee;
+  color: #424242;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  background-color: #0066cc;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+button:hover {
+  background-color: #0052a3;
+}
+
+button:active {
+  background-color: #003d7a;
 }

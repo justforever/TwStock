@@ -9,18 +9,23 @@
 
 **M0（骨架）已完成並通過里程碑驗收**（報告：[docs/reports/M0.md](docs/reports/M0.md)；規格：[docs/specs/M0-skeleton.md](docs/specs/M0-skeleton.md)）。
 
+**M1（價格 + K 線）已完成並通過里程碑驗收**（規格：[docs/specs/M1-price.md](docs/specs/M1-price.md)；驗收：`scripts/m1_verify.sh`）。
+
 目前可用的功能：
 
 | 項目 | 狀態 |
 | --- | --- |
-| PostgreSQL（+TimescaleDB，若有）schema：`stock`、`trading_calendar`，由 Alembic 管理 | 完成 |
-| ETL：TWSE / TPEx 個股清單（ISIN 一覽表）、TWSE 休市日與交易日曆、冪等寫入、CLI、APScheduler 每日排程 | 完成 |
-| API：`GET /api/stocks?q=`（代號前綴／名稱包含、臺台互通）、`GET /api/health` | 完成 |
-| Web：React + Vite 搜尋頁（防抖、`/` 快捷鍵、`/stock/:id` 占位頁） | 完成 |
+| PostgreSQL（+TimescaleDB，若有）schema：`stock`、`trading_calendar`、`daily_price`、`index_daily`、`adj_factor`、`etl_job_log`，由 Alembic 管理 | 完成 |
+| ETL：TWSE / TPEx 個股清單、日成交價格、加權指數、除權除息、排程、CLI、回補腳本 | 完成 |
+| API：`GET /api/stocks`、`GET /api/stocks/{id}`、`GET /api/stocks/{id}/prices`、`GET /api/indices/{id}/prices`、`GET /api/etl/jobs`、`GET /api/etl/summary` | 完成 |
+| Web：搜尋頁、個股 K 線頁（還原價開關、區間切換、MA、成交量）、ETL 狀態頁（維運用） | 完成 |
 | Docker Compose：`db` / `migrate` / `api` / `etl` / `web` 五個 service | 完成 |
-| 日 K 線、法人買賣超、集保分布、財報 | 尚未開始（M1 之後） |
+| 法人買賣超、集保分布、財報、營收趨勢 | 尚未開始（M2 之後） |
 
-尚未做的事：`daily_price` 等時序表。個股清單（TWSE/TPEx ISIN）真實來源已驗證通過（見 [docs/reports/M0.md](docs/reports/M0.md)「未解問題」U-1）；TDCC/MOPS/FinMind 尚未驗證。
+M1 新增功能說明：
+- 個股頁 `/stock/:id`：K 線圖（最新 1 年，支援 3M / 6M / 1Y / 3Y / 5Y 區間切換）、MA5/20/60 均線、成交量副圖、還原價開關（切換後自動重新載入資料）。
+- ETL 狀態頁 `/admin/etl`：監看 ETL job 執行紀錄，可手動刷新。
+- 回補腳本 `scripts/backfill.py`：支援離線模式（用 fixture 快速測試），斷點續傳，進度輸出。
 
 ## 本機啟動方式（macOS，Docker）
 
@@ -194,10 +199,13 @@ cd web && npm install && npm run dev
 TWSTOCK_TEST_DATABASE_URL="$(scripts/pg_temp.sh start)" .venv/bin/python -m pytest
 
 # 前端
-cd web && npm test
+cd web && npm test && npm run build
 
 # M0 整合驗收（自建臨時 DB → migration → 載入 fixture → 起 API → 逐檔驗證可搜尋）
 scripts/m0_verify.sh   # 成功時最後一行為 M0 VERIFY PASSED
+
+# M1 整合驗收（自建臨時 DB → migration → 以 fixture 離線回補 → 起 API → 驗證 M1 數值）
+scripts/m1_verify.sh   # 成功時最後一行為 M1 VERIFY PASSED
 
 # Docker Compose 設定語法檢查（不會真的啟動）
 docker compose -f deploy/docker-compose.yml --env-file .env.example config --quiet

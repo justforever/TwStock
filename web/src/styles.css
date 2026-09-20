@@ -47,7 +47,7 @@ header a:hover {
 
 main {
   flex: 1;
-  max-width: 720px;
+  max-width: 1080px;
   width: 100%;
   margin: 0 auto;
   padding: 2rem 1rem;
@@ -294,4 +294,172 @@ button:hover {
 
 button:active {
   background-color: #003d7a;
+}
+
+/* 分頁按鈕 */
+[role="tablist"] {
+  display: flex;
+  border-bottom: 2px solid #e0e0e0;
+  gap: 2rem;
+  margin-bottom: 1.5rem;
+}
+
+[role="tab"] {
+  padding: 0.75rem 0;
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+  font-size: 1rem;
+  color: #666;
+  font-weight: 500;
+}
+
+[role="tab"][aria-selected="true"] {
+  color: #0066cc;
+  border-bottom-color: #0066cc;
+}
+
+/* 圖表堆疊 */
+.chart-stack {
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.chart-controls {
+  display: flex;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background-color: #f9f9f9;
+  border-radius: 4px;
+}
+
+.chart-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.chart-controls input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.chart-pane {
+  margin-bottom: 1rem;
+  position: relative;
+}
+
+.chart-pane-title {
+  font-size: 0.75rem;
+  color: #999;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.chart-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.85rem;
+}
+
+.readout-item {
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem 0.75rem;
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  min-width: 140px;
+}
+
+.readout-label {
+  font-size: 0.75rem;
+  color: #999;
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+}
+
+.readout-value {
+  font-weight: 600;
+  color: #333;
+}
+
+.readout-value.up {
+  color: #d32f2f;
+}
+
+.readout-value.down {
+  color: #2e7d32;
+}
+
+/* 籌碼分頁 */
+.chip-section {
+  margin-bottom: 2.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.chip-section:last-child {
+  border-bottom: none;
+}
+
+.chip-metric {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+}
+
+.chip-table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 1.5rem;
+}
+
+.chip-table th {
+  background-color: #f5f5f5;
+  padding: 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 2px solid #e0e0e0;
+  font-size: 0.9rem;
+}
+
+.chip-table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid #e0e0e0;
+  font-size: 0.9rem;
+}
+
+.chip-table td:last-child,
+.chip-table th:last-child {
+  text-align: right;
+}
+
+.chip-table tr:last-child td {
+  border-bottom: none;
+}
+
+.chip-table tr:hover {
+  background-color: #fafafa;
+}
+
+.hint {
+  font-size: 0.8rem;
+  color: #999;
+  margin-left: 0.5rem;
+  font-weight: 400;
 }

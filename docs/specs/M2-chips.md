@@ -2985,7 +2985,7 @@ M1 的 V-1 ～ V-8 若仍未回報，不影響 M2 的本環境驗收，但**在�
 | T2-5 | 來源 parser：融資融券（上市／上櫃）、借券賣出、外資持股 | T2-4（共用 `find_field_all`） | DONE | [T2-5](../reviews/T2-5.md) |
 | T2-6 | Loader、來源登錄表、統一 job／CLI／排程／回補 | T2-4、T2-5 | DONE | — |
 | T2-7 | API：四個籌碼端點，與後端整合驗收腳本 | T2-3、T2-6 | DONE | [T2-7](../reviews/T2-7.md) |
-| T2-8 | 前端：副圖與主圖十字線同步、籌碼分頁 | T2-7 | TODO | — |
+| T2-8 | 前端：副圖與主圖十字線同步、籌碼分頁 | T2-7 | DONE | [T2-8](../reviews/T2-8.md) |
 
 狀態語意固定四種（D-027）：`TODO`（沒做）、`IN_REVIEW`（程式已在 `main`／已回報，等待審查）、
 `DONE`（審查通過，且 `docs/reviews/<任務>.md` 存在）、`BLOCKED`（**只有** Reviewer 實際出具 REQUEST_CHANGES 報告後才能標）。

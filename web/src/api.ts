@@ -155,3 +155,136 @@ export async function fetchEtlJobs(
   }
   return response.json()
 }
+
+// 籌碼相關的型別
+export interface InstitutionalBar {
+  time: string
+  foreign_buy: number
+  foreign_sell: number
+  foreign_net: number
+  trust_buy: number
+  trust_sell: number
+  trust_net: number
+  dealer_buy: number
+  dealer_sell: number
+  dealer_net: number
+  total_net: number
+}
+
+export interface MarginBar {
+  time: string
+  margin_buy: number
+  margin_sell: number
+  margin_redeem: number
+  margin_prev_balance: number
+  margin_balance: number
+  margin_limit: number | null
+  short_buy: number
+  short_sell: number
+  short_redeem: number
+  short_prev_balance: number
+  short_balance: number
+  short_limit: number | null
+  offset_amount: number
+  sbl_sell: number | null
+  sbl_balance: number | null
+  margin_ratio: number | null
+}
+
+export interface ForeignHoldingBar {
+  time: string
+  issued_shares: number | null
+  holding_shares: number
+  available_shares: number | null
+  holding_ratio: number | null
+  available_ratio: number | null
+  limit_ratio: number | null
+}
+
+export interface ShareholdingLevel {
+  level: number
+  holders: number
+  shares: number
+  ratio: number
+}
+
+export interface ShareholdingWeek {
+  week: string
+  total_holders: number
+  total_shares: number
+  big_holder_ratio: number
+  retail_ratio: number
+  levels: ShareholdingLevel[]
+}
+
+export async function fetchInstitutional(
+  stockId: string,
+  params: { from?: string; to?: string; limit?: number },
+  signal?: AbortSignal
+): Promise<{ stock_id: string; count: number; items: InstitutionalBar[] }> {
+  const url = new URL(`/api/stocks/${stockId}/institutional`, window.location.origin)
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined) {
+      url.searchParams.set(key, String(value))
+    }
+  })
+  const response = await fetch(url.toString(), { signal })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function fetchMargin(
+  stockId: string,
+  params: { from?: string; to?: string; limit?: number },
+  signal?: AbortSignal
+): Promise<{ stock_id: string; count: number; items: MarginBar[] }> {
+  const url = new URL(`/api/stocks/${stockId}/margin`, window.location.origin)
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined) {
+      url.searchParams.set(key, String(value))
+    }
+  })
+  const response = await fetch(url.toString(), { signal })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function fetchForeignHolding(
+  stockId: string,
+  params: { from?: string; to?: string; limit?: number },
+  signal?: AbortSignal
+): Promise<{ stock_id: string; count: number; items: ForeignHoldingBar[] }> {
+  const url = new URL(`/api/stocks/${stockId}/foreign-holding`, window.location.origin)
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined) {
+      url.searchParams.set(key, String(value))
+    }
+  })
+  const response = await fetch(url.toString(), { signal })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function fetchShareholding(
+  stockId: string,
+  params: { from?: string; to?: string; limit?: number },
+  signal?: AbortSignal
+): Promise<{ stock_id: string; count: number; items: ShareholdingWeek[] }> {
+  const url = new URL(`/api/stocks/${stockId}/shareholding`, window.location.origin)
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined) {
+      url.searchParams.set(key, String(value))
+    }
+  })
+  const response = await fetch(url.toString(), { signal })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+  return response.json()
+}

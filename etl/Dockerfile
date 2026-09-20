@@ -3,5 +3,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TZ=Asia/Taipei
 WORKDIR /app
 COPY db /app/db
 COPY etl /app/etl
+COPY scripts /app/scripts
 RUN pip install --no-cache-dir /app/db /app/etl
 CMD ["python", "-m", "twstock_etl.cli", "scheduler"]

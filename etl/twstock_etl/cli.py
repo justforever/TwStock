@@ -13,6 +13,14 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from twstock_db.config import get_database_url
 from twstock_db.engine import get_engine
+from twstock_etl.backfill import (
+    BackfillAborted,
+    BackfillOptions,
+    backfill_calendar,
+    backfill_exright,
+    backfill_index,
+    backfill_prices,
+)
 from twstock_etl.errors import SourceFormatError
 from twstock_etl.jobs import (
     load_adj_factors,
@@ -27,6 +35,19 @@ from twstock_etl.scheduler import build_scheduler
 logger = logging.getLogger(__name__)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
+
+BACKFILL_EPILOG = """建議順序（第一次回補 5 年）：
+  1. python -m twstock_etl.cli load-stocks --market TWSE
+  2. python -m twstock_etl.cli load-stocks --market TPEx
+  3. python -m twstock_etl.cli load-calendar                      # 今年
+  4. python -m twstock_etl.cli backfill index    --from 2021-01 --to 2026-09     # 約 60 次請求
+  5. python -m twstock_etl.cli backfill calendar --from-year 2021 --to-year 2025 # 不發請求
+  6. python -m twstock_etl.cli backfill price    --market TWSE --from 2021-01-04 --to 2026-09-18
+  7. python -m twstock_etl.cli backfill price    --market TPEx --from 2021-01-04 --to 2026-09-18
+  8. python -m twstock_etl.cli backfill exright  --from 2021-01-01 --to 2026-09-18
+
+步驟 6、7 各約 1,200 次請求，--sleep 3 約需 1 小時。可以隨時 Ctrl-C，再執行會從中斷處繼續。
+"""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -171,6 +192,113 @@ def main(argv: list[str] | None = None) -> int:
         help="覆蓋已有的日曆紀錄",
     )
 
+    # backfill 子指令
+    backfill_parser = subparsers.add_parser(
+        "backfill",
+        help="歷史資料回補（速率限制、斷點續傳、進度輸出）",
+        epilog=BACKFILL_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    backfill_sub = backfill_parser.add_subparsers(dest="backfill_command", required=True)
+
+    def _add_backfill_common_options(p: argparse.ArgumentParser) -> None:
+        """為回補子指令加共用選項。"""
+        p.add_argument(
+            "--sleep",
+            type=float,
+            default=3.0,
+            help="兩次請求間隔（秒），預設 3.0",
+        )
+        p.add_argument(
+            "--force",
+            action="store_true",
+            help="強制重新抓取，不使用斷點續傳",
+        )
+        p.add_argument(
+            "--source-dir",
+            type=Path,
+            help="離線模式：從指定目錄讀 JSON，不發 HTTP",
+        )
+        p.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="只印要做什麼，不寫 DB、不發 HTTP",
+        )
+        p.add_argument(
+            "--max-failures",
+            type=int,
+            default=10,
+            help="最多容許失敗次數，預設 10",
+        )
+
+    # backfill price 子子指令
+    price_parser = backfill_sub.add_parser("price", help="回補個股日 K")
+    price_parser.add_argument(
+        "--market",
+        choices=["TWSE", "TPEx"],
+        required=True,
+        help="市場（TWSE 上市、TPEx 上櫃）",
+    )
+    price_parser.add_argument(
+        "--from",
+        type=_parse_date,
+        required=True,
+        dest="start",
+        help="起始日期（YYYY-MM-DD，含）",
+    )
+    price_parser.add_argument(
+        "--to",
+        type=_parse_date,
+        required=True,
+        dest="end",
+        help="結束日期（YYYY-MM-DD，含）",
+    )
+    _add_backfill_common_options(price_parser)
+
+    # backfill index 子子指令
+    index_parser = backfill_sub.add_parser("index", help="回補加權指數")
+    index_parser.add_argument(
+        "--from",
+        required=True,
+        dest="start",
+        help="起始年月（YYYY-MM，含）",
+    )
+    index_parser.add_argument(
+        "--to",
+        required=True,
+        dest="end",
+        help="結束年月（YYYY-MM，含）",
+    )
+    _add_backfill_common_options(index_parser)
+
+    # backfill exright 子子指令
+    exright_parser = backfill_sub.add_parser("exright", help="回補除權息")
+    exright_parser.add_argument(
+        "--from",
+        type=_parse_date,
+        required=True,
+        dest="start",
+        help="起始日期（YYYY-MM-DD，含）",
+    )
+    exright_parser.add_argument(
+        "--to",
+        type=_parse_date,
+        required=True,
+        dest="end",
+        help="結束日期（YYYY-MM-DD，含）",
+    )
+    _add_backfill_common_options(exright_parser)
+
+    # backfill calendar 子子指令
+    calendar_parser = backfill_sub.add_parser(
+        "calendar", help="反推交易日曆（由指數推算）"
+    )
+    calendar_parser.add_argument(
+        "--from-year", type=int, required=True, help="起始年份（含）"
+    )
+    calendar_parser.add_argument("--to-year", type=int, required=True, help="結束年份（含）")
+    _add_backfill_common_options(calendar_parser)
+
     # scheduler 子指令
     subparsers.add_parser("scheduler", help="啟動排程器")
 
@@ -189,6 +317,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_load_exright(args)
         elif args.command == "rebuild-calendar":
             return _cmd_rebuild_calendar(args)
+        elif args.command == "backfill":
+            return _cmd_backfill(args)
         elif args.command == "scheduler":
             return _cmd_scheduler()
     except (SourceFormatError, httpx.HTTPError, RuntimeError, FileNotFoundError) as e:
@@ -363,6 +493,47 @@ def _cmd_scheduler() -> int:
         return 0
 
     return 0
+
+
+def _cmd_backfill(args: argparse.Namespace) -> int:
+    """backfill 子指令實作；回傳碼 0 成功／1 有失敗／2 超過失敗上限／130 被 Ctrl-C 中斷。"""
+    engine = get_engine()
+    options = BackfillOptions(
+        sleep_seconds=args.sleep,
+        max_failures=args.max_failures,
+        force=args.force,
+        source_dir=args.source_dir,
+        dry_run=args.dry_run,
+    )
+
+    try:
+        if args.backfill_command == "price":
+            summary = backfill_prices(engine, args.market, args.start, args.end, options)
+        elif args.backfill_command == "index":
+            summary = backfill_index(engine, args.start, args.end, options)
+        elif args.backfill_command == "exright":
+            summary = backfill_exright(engine, args.start, args.end, options)
+        elif args.backfill_command == "calendar":
+            summary = backfill_calendar(engine, args.from_year, args.to_year, options)
+        else:
+            return 1
+
+        # 檢查結果
+        if summary.interrupted_at:
+            print(
+                f"已中斷，下次執行會從 {summary.interrupted_at} 繼續", file=sys.stderr
+            )
+            return 130
+        elif summary.failed > 0:
+            return 1
+
+        return 0
+
+    except BackfillAborted as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":

@@ -267,3 +267,107 @@
 - 理由：T1-4 連續三輪 REQUEST_CHANGES 的 Blocker 全部源自這個契約沒被寫清楚：(1) 第 1 輪為了讓 skip 傳到 CLI 而改掉 `job_log.py`，讓排程器把每天正常的「已完成，略過」用 `logger.exception` 記成 ERROR；(2) 第 2 輪只修了三個 job 中的一個，另外兩個在 skip 後回傳未賦值的區域變數而拋 `UnboundLocalError`，CLI 還留下 `except JobSkipped` 死碼造成 `NameError`；(3) 第 3 輪回傳型別從 `int` 改成 dataclass，`scheduler.py` 兩個呼叫端沒跟著改，`logger.info("… %d 筆", result)` 在 `logging` 內部拋 `TypeError`。「略過」是每日排程的正常路徑（見 D-022），用例外表達它，就等於讓正常路徑不斷踩到呼叫端的錯誤處理；用回傳值表達，型別檢查與測試都看得見。單一 `return` + 事先初始化則讓 `UnboundLocalError` 這一類缺陷結構上不可能發生。
 - 替代方案：讓 `JobSkipped` 往外拋，呼叫端各自 `except JobSkipped`（每多一個呼叫端就多一個會漏寫的地方，第 1 輪已經實證失敗）；回傳 `int | None`，`None` 代表 skip（丟失 skip 原因，CLI 印不出 `reason=`）；改用 `typing.Protocol` 或共用基底 dataclass（對能力有限的 Coder 而言抽象成本高於收益，三個 dataclass 各自扁平就夠）。
 - 影響：T1-5 `backfill.py` 的斷點續傳直接讀 `result.skip_reason` 判斷是否計入 `skipped`，不必包 `try/except`；T1-6 不直接呼叫 job 函式，不受影響。規格 `docs/specs/M1-price.md` §T1-4 已同步改寫（§3 共同契約、§4 skip 輸出格式、§5 `_log_job_outcome`）。
+
+## D-029　M2 範圍邊界：借券與外資持股只收上市、集保無回補、法人副圖以「合計柱」交付
+
+- 日期：2026-09-21（M2 規劃）
+- 決策：M2 收「三大法人（上市＋上櫃）、融資融券（上市＋上櫃）、借券賣出（上市）、外資持股（上市）、集保股權分散（全市場）」。**不收**上櫃借券、上櫃外資持股、上櫃除權息（U-10）；集保**沒有回補**；前端法人副圖畫「三大法人合計買賣超」單一柱，不做堆疊柱（見 D-039）；npm 相依升級（U-13）不放進 M2。
+- 理由：
+  - M2 一次要碰五個從未驗證過的新端點（S1～S9），風險已經集中；上櫃借券與上櫃外資持股的官方端點連 URL 都不確定，硬收進來只會讓「規格寫得出來、真實資料對不上」的缺口再多兩個。
+  - 集保開放資料官方只留最新一週（`docs/plan.md` 資料來源表），回補在物理上不存在，寫一個永遠不會成功的 `backfill shareholding` 只會誤導使用者。
+  - 上櫃除權息要新來源＋還原係數重算，與籌碼無關，塞進 M2 會讓「副圖十字線同步」這個完成標準被稀釋；M2 改為在前端還原價開關旁加註記，成本一行。
+  - U-13 要升 `react-router-dom` 到 7.18（有破壞性變更），與籌碼混在同一個里程碑會讓審查失焦；本專案只綁 `127.0.0.1`，風險可接受。
+- 替代方案：M2 全收（任務會從 8 個膨脹到 12 個以上，且多數卡在無法驗證的來源）；把上櫃借券用 FinMind 補（會引入第二套資料語意與每小時配額，違反「官方來源做每日增量」的既有分工）。
+- 影響：`margin_daily.sbl_*` 與 `foreign_holding` 在 M2 只有上市資料，API 對上櫃個股會回 `count: 0`，前端要能容忍空資料（T2-8 的 `Promise.allSettled`）。
+
+## D-030　回補主入口改為 `python -m twstock_etl.cli backfill …`，`scripts/backfill.py` 降為薄包裝
+
+- 日期：2026-09-21（M2，T2-1）
+- 決策：把 `scripts/backfill.py` 的 argparse 與收尾邏輯整組搬進 `twstock_etl/cli.py` 的 `backfill` 子指令；`scripts/backfill.py` 只剩 `sys.exit(main(["backfill", *sys.argv[1:]]))`。同時在 `etl/Dockerfile` 加 `COPY scripts /app/scripts`。
+- 理由：M1 的 U-9——`etl/Dockerfile` 只 `COPY db etl`，所以 `docker compose exec etl python scripts/backfill.py` 找不到檔案，回補只能在 host venv 跑或額外掛載目錄。M2 要再加一個 `backfill chip`，回補的使用頻率只會上升。把邏輯放進套件，映像裡天生就有；`COPY scripts` 則讓 M1 時期寫下的指令與 README 範例繼續能用，兩條路都通，README 不必大改。
+- 替代方案：只加 `COPY scripts`（`scripts/` 仍在 `sys.path` 外，要靠 `sys.path.insert` 這種脆弱寫法，且 `--help` 不會出現在 CLI 的子指令清單裡）；把 `scripts/backfill.py` 直接刪掉（M1 報告 §4 與 README §6 全篇都在講這支檔案，刪掉等於讓既有文件失效）。
+- 影響：`scripts/m1_verify.sh` 不用改（薄包裝的輸出與離開碼 0／1／2／130 完全相同）；`scripts/m2_verify.sh` 一律用新寫法。
+
+## D-031　`daily_price` 加 `(stock_id, trade_date DESC)` 索引，但效益要等真實資料量才算數
+
+- 日期：2026-09-21（M2，T2-1）
+- 決策：migration `0003` 建 `ix_daily_price_stock_date_desc ON daily_price (stock_id, trade_date DESC)`，解掉 M1 的 U-14。
+- 理由：API 的 `fetch_prices` 與 `latest_bar` 都是 `WHERE stock_id = ? ORDER BY trade_date DESC LIMIT ?`。主鍵 `(stock_id, trade_date)` 其實可以反向掃描滿足這個查詢，所以這個索引的邊際效益**可能接近零**；但它成本很低（240 萬列約數十 MB），而且 M2 之後 `institutional_daily` / `margin_daily` 會用同一組查詢模式，先把慣例定下來比之後再改乾淨。
+- 替代方案：不加（U-14 會一直掛著，而且沒有人會回頭量）；等 V-6 回補完再決定（使用者的回報一直沒進來，等於無限期擱置）。
+- 影響：索引的**實際**效益列入 M1 的 V-6 之後補量（`EXPLAIN ANALYZE` 比較有無索引的差異）；若量出來沒有差異，M3 可以刪掉它，刪除成本同樣很低。籌碼三表在 M2 只建 `(trade_date)` 單欄索引，主鍵已涵蓋個股查詢，**不要**比照 `daily_price` 再各加一個 DESC 索引。
+
+## D-032　備份用 `scripts/backup.sh` + `pg_dump -Fc`，保留 7 份，不進 compose
+
+- 日期：2026-09-21（M2，T2-1）
+- 決策：新增 `scripts/backup.sh`，用 `pg_dump --format=custom --no-owner --no-privileges` 輸出到 `data/backup/twstock_<時間戳>.dump`，只保留最新 7 份，還原指令寫在檔頭註解與規格 §7 的 V-19。**不**加進 `deploy/docker-compose.yml`，**不**加排程。
+- 理由：M1 的 U-12——5 年回補要 3 小時、約 240 萬列，目前只有一個 named volume，volume 壞掉就得重來。`-Fc`（custom format）比 `-Fp` 小且支援 `pg_restore` 選擇性還原。之所以不進 compose：備份要寫到「Docker volume 之外」才有意義，而跨 volume 的備份容器會把部署拓樸複雜化；個人專案手動跑一行指令的成本遠低於維護一個備份 service。
+- 替代方案：compose 加一個 `backup` service 跑 cron（要處理容器內時區、volume 掛載、失敗通知，收益不對等）；用 `pg_basebackup` 或 volume 快照（需要停機或檔案系統支援）；只靠 `docker volume` 備份（拿不到邏輯一致的快照）。
+- 影響：`.gitignore` 已經排除 `data`，備份檔不會進版控。還原流程要在 M2 的里程碑報告與 README 補一段。
+
+## D-033　`JobRun.set_target()`：目標要解析完資料才知道的 job，允許事後補記 `target_date`
+
+- 日期：2026-09-21（M2，T2-3）
+- 決策：`loaders/job_log.py` 的 `JobRun` 增加 `target_date` / `target_key` / `engine` 三個欄位與一個 `set_target()` 方法，在 job 執行中以獨立交易 UPDATE `etl_job_log` 那一列。`job_run()` 的 success／skipped／failed 三條路徑完全不動。
+- 理由：集保股權分散（TDCC）官方只提供「最新一週」，**週五日期寫在檔案裡**，呼叫端在下載之前不知道 `target_date` 是哪一天。若沿用 M1 的作法把「執行當天」當 `target_date`，斷點續傳就會變成「今天跑過沒有」而不是「這一週抓過沒有」——同一週六跑第二次會誤判成已完成，跨日重試又會重複寫入，兩種錯都會發生。把 `target_date` 改成資料自己的週五日期，`has_successful_run` 的語意才正確。
+- 替代方案：先在 `job_run` 外面下載、解析、算出 `week_date`，再開 `job_run`（下載與解析失敗就完全不會進 `etl_job_log`，維運頁看不到失敗，違反 D-025）；用 `target_key` 存「執行當天」再額外開一張表記週次（多一張表換一個欄位，不划算）。
+- 影響：只有集保這一個 job 用得到；其他 job 一律在 `job_run(...)` 呼叫時就把 target 給足。`set_target()` 在 `engine is None` 時拋 `RuntimeError`，避免有人手動建 `JobRun` 後誤用。
+
+## D-034　籌碼 ETL 以「來源登錄表 `CHIP_SOURCES`」統一 job／CLI／排程／回補
+
+- 日期：2026-09-21（M2，T2-6）
+- 決策：新增 `etl/twstock_etl/chip_sources.py`，用 `ChipSource(kind, market, job_name, label, fetch, parse, upsert)` 把六個籌碼來源登錄成一張 `dict[(kind, market)]`。上層只有**一個** job 函式 `load_chip_daily(engine, kind, market, trade_date, …)`、**一個** CLI 子指令 `load-chip --kind --market`、**一個** 排程 wrapper `run_chip_job(engine, kind, market)`（用 `CHIP_SCHEDULE` 常數跑迴圈註冊六個 job）、**一個** 回補函式 `backfill_chip(engine, kind, market, …)`。
+- 理由：M1 的三個價格來源各寫一份 job／CLI／排程，結果同一個契約錯誤要修三次（見 D-028 的三輪退回紀錄）。M2 有六個來源，照舊寫法就是六份幾乎一樣的程式、六個會各自走樣的 skip 輸出格式。登錄表讓「新增一個來源」變成「多一列 dict」，而契約（`job_run` 包法、斷點續傳、日曆檢查、單一 `return`）只有一份可以出錯。
+- 替代方案：每一類各寫一份（M1 已實證會出錯，且任務規模會從 1 個膨脹到 4 個）；用繼承／`Protocol` 定義 `ChipSource` 基底類別（對 Haiku 等級的 Coder 抽象成本高於收益，扁平 dataclass + dict 就夠）。
+- 影響：`kind × market` 組合不存在時（例如上櫃借券）`get_chip_source` 拋 `ValueError`，而且是在進 `job_run` **之前**拋，不會在 `etl_job_log` 留下沒有意義的 failed 列。集保因為不是日頻、沒有市場別、`target_date` 要事後補記（D-033），**不**放進這張登錄表。
+
+## D-035　三大法人欄位歸併：外資＝外陸資＋外資自營商、自營商＝自行買賣＋避險；買賣超一律自行相減
+
+- 日期：2026-09-21（M2，T2-4）
+- 決策：`institutional_daily` 的 `foreign_*` ＝「外陸資（不含外資自營商）」＋「外資自營商」，`dealer_*` ＝「自營商（自行買賣）」＋「自營商（避險）」，`trust_*` 就是投信。三組的 `*_net` **一律用買進減賣出自己算**，不讀官方的買賣超欄；官方的「三大法人買賣超股數」原值另外存進 `total_net` 供核對。欄位靠新增的 `find_field_all(fields, *tokens, exclude=…)` 依關鍵字找，不寫死索引。
+- 理由：
+  - 官方 T86 從 2017 年起把外資拆成「外陸資」與「外資自營商」兩段，上櫃又用不同的欄位命名（`外資及陸資(不含外資自營商)買進股數`）。若只取其中一段，外資買賣超會長期短少；合併成一個「外資」才是使用者在看盤軟體上看到的數字。
+  - 買賣超欄在部分日期是空字串或帶符號的 HTML，直接讀會拿到 `None`；用買進減賣出則永遠有值，且自洽。
+  - 保留 `total_net` 是為了讓「自己算的三組相加」與「官方合計」可以對帳；真實資料上線後若兩者常常不等，就是欄位歸併抓錯了，能立刻發現。
+  - `find_field` 的前綴比對在上櫃格式會抓錯欄（`外資及陸資` 這個前綴同時命中買進與賣出），所以要一個「全部關鍵字都要命中」的找法。
+- 替代方案：分開存 `foreign_excl_dealer_*` 與 `foreign_dealer_*` 四組欄位（欄位翻倍，前端每次都要自己加，且上櫃舊格式沒有這個拆分）；直接讀官方買賣超欄（空值與符號問題）。
+- 影響：`find_field_all` 是新增函式，`find_field` / `extract_table` / `is_no_trade` 的行為完全不動，M1 的四個 parser 不受影響。
+
+## D-036　融資融券來源的數量單位是「張」，loader 一律 ×1000 存成「股」；借券與外資持股不換算
+
+- 日期：2026-09-21（M2，T2-5）
+- 決策：`sources/margin.py` 定義 `SHARES_PER_LOT = 1000`，對上市 MI_MARGN 與上櫃融資融券餘額表的**所有數量欄位**（含 `margin_limit` / `short_limit`）乘 1000 後存進 `margin_daily`；借券賣出（TWT93U）與外資持股（MI_QFIIS）本來就是「股」，**不乘**。
+- 理由：`CLAUDE.md` 的慣例是「股數單位一律『股』」。官方融資融券報表的個股列位單位是「交易單位（張）」，若原樣存入，`margin_daily` 會和 `daily_price.volume`（股）差 1000 倍，前端同一張副圖上就對不起來。把換算放在 parser（而不是 API 或前端），是因為「進 DB 的數字一律是股」這條不變量越早成立越好。
+- 替代方案：存原始張數另加一個 `unit` 欄（每個讀取端都要記得換算，遲早有人忘記）；在 API 層換算（DB 裡的數字會與其他表語意不一致，寫 SQL 查的時候最容易出錯）。
+- 風險與對策：**這是本里程碑最可能被真實資料打臉的假設**（本環境連不到官方站，無法確認）。已列為規格 §7 的 **V-13** 專項驗證：回補一天後把 `2330` 的 `margin_balance` 與官方網頁的「融資餘額（張）」對照，必須剛好是張數 ×1000。若不符，改 `SHARES_PER_LOT` 或改成不換算，並回頭補記一筆決策。
+
+## D-037　借券資料與融資融券共用 `margin_daily`，以「只更新 `sbl_*` 兩欄」的部分 upsert 寫入
+
+- 日期：2026-09-21（M2，T2-5／T2-6）
+- 決策：借券賣出不另建表，寫進 `margin_daily` 的 `sbl_sell` / `sbl_balance` 兩欄（可為 `NULL`）。`upsert_sbl()` 的 INSERT 只帶 `stock_id, trade_date, sbl_sell, sbl_balance, source`，`ON CONFLICT DO UPDATE` 的 `set_` **只有** `sbl_sell`、`sbl_balance`、`updated_at`；`upsert_margin()` 反過來，`set_` 裡**不含** `sbl_*`。
+- 理由：`docs/plan.md` 的資料表設計就把 `sbl_sell/balance` 放在 `margin_daily`——三者都是「信用交易餘額」，前端也總是一起看。但兩邊來自不同端點、公布時間也不同（融資券約 21:00、借券稍晚），一定會有「只有一邊先到」的時刻。部分欄位 upsert 讓兩個 job 的先後順序完全不重要，也不會互相覆蓋成 0。其餘 `NOT NULL` 欄位靠 DDL 的 `DEFAULT 0`，所以借券先到時那一列仍然合法。
+- 替代方案：另建 `sbl_daily` 表（前端與 API 要多一次查詢與一次 join，而且 plan 的 schema 要改）；兩個 job 合併成一個（公布時間不同，合併會讓先到的資料被迫等後到的）。
+- 影響：`sbl_sell` / `sbl_balance` 為 `NULL` 代表「那天沒有借券資料」，不是 0；API 原樣回 `null`，前端顯示 `—`。`scripts/verify_chips.py` 的第 4 項就在驗這件事（09-18 有借券、09-16 沒有，而 09-16 的融資券數字不能被動到）。
+
+## D-038　集保級距語意：大戶＝level 12–15（400 張以上）、散戶＝level 1–4（15 張以下）
+
+- 日期：2026-09-21（M2，T2-7）
+- 決策：`shareholding_dist.level` 沿用集保的 1–15 級距、16 合計、17 差異數調整。API 的 `big_holder_ratio` ＝ level 12–15 的 `ratio` 相加、`retail_ratio` ＝ level 1–4 的 `ratio` 相加，兩者在 API 層算、不落地；`levels` 陣列只回 1–15，`total_holders` / `total_shares` 取 level 16，沒有 16 時用 1–15 加總。
+- 理由：`docs/plan.md` 的籌碼分頁要「400 張以上大戶比例 vs 股價」。集保的 level 12 是「400,001 股以上」，剛好就是 400 張以上的切點，直接對應不需要插值。散戶沒有官方定義，本專案取 level 1–4（≤15,000 股＝15 張）作為「零股到十幾張」的小額持有人，並把這個定義寫進規格，讓前端、API、之後的排行頁用同一套。把 16／17 排除在 `levels` 之外，是因為它們不是級距、放進去會讓前端畫圖時多出兩根假柱子。
+- 替代方案：把大戶／散戶比例存進 DB（每次調整定義就要重算全部歷史）；用 level ≥ 11（200 張以上）當大戶（與 plan 的文字不符）。
+- 影響：定義一旦要改，只動 `chip_repository.py` 的 `BIG_HOLDER_LEVELS` / `RETAIL_LEVELS` 兩個常數即可，歷史資料不用重算。
+
+## D-039　副圖同步採「每個 pane 各一張 chart ＋ `subscribeCrosshairMove` / `setCrosshairPosition`」，同步邏輯抽成純函式；法人副圖畫合計柱
+
+- 日期：2026-09-21（M2，T2-8）
+- 決策：
+  1. 個股頁的每個 pane（主圖 K 線、成交量、三大法人、融資融券）各自是一個 `createChart()` 實例，靠三件事對齊：所有 pane 的 `rightPriceScale.minimumWidth` 設成同一個值、`subscribeVisibleLogicalRangeChange` 互相同步時間軸、`subscribeCrosshairMove` → 其他 pane `setCrosshairPosition(value, time, series)`（滑鼠移出時 `clearCrosshairPosition()`）。
+  2. 同步邏輯抽成 `web/src/chartSync.ts` 的純函式 `applyCrosshairToOthers(panes, sourceId, time)` 與 `crosshairTime(param)`，只依賴 `setCrosshairPosition` / `clearCrosshairPosition` 兩個方法，因此可以用假物件單元測試。
+  3. 三大法人副圖畫「三大法人合計買賣超」**單一** histogram（正紅負綠），不做外資／投信／自營的堆疊柱；三個數字改由十字線讀數面板與籌碼分頁提供。
+  4. `ChartStack` 用**單一 `useEffect`**（deps 含資料與開關）整組重建圖表，不維護「series 已存在、資料換了」的狀態機。
+- 理由：
+  - Lightweight Charts 4.2.3 沒有多 pane API（`addPane` 是 v5 之後才有），多副圖只能多開 chart；`setCrosshairPosition` / `clearCrosshairPosition` 在 4.2.3 已經存在（Architect 已在 `web/node_modules/lightweight-charts/dist/typings.d.ts` 確認）。
+  - 「副圖與主圖十字線同步」是 M2 的**里程碑完成標準**，而 jsdom 測不了真正的繪圖。把同步邏輯抽成純函式，就能把這條完成標準寫成可執行的單元測試（`chartSync.test.ts`）＋ 以 `vi.mock` 抓 handler 的整合測試（`ChartStack.test.tsx`），而不是只能靠人眼看。
+  - histogram 一律從 `base`（預設 0）畫起，無法表達「從 5 畫到 8」的線段，因此正負混合的堆疊柱在 4.2.3 做不出來；硬做出來的近似（依累計值由大到小疊畫）在單日三者不同號時會畫錯，寧可先給正確的合計柱。
+  - 單一 effect 重建的成本只在使用者切換區間／還原價／副圖開關時發生（每次數百到上千根 K 棒，遠低於 Lightweight Charts 的負荷），換來的是 M1 T1-4 那種「狀態機沒同步」的缺陷結構上不可能發生。
+- 替代方案：升級到 lightweight-charts v5 用原生多 pane（M1 才剛把 v4 API 寫穩，升版是另一個里程碑的事）；用一張 chart 疊多個 `priceScaleId` 與 `scaleMargins` 切出上下區塊（十字線是共用的，但每個區塊的價格軸刻度會互相干擾，且 y 軸讀數無法分開格式化）；改用 ECharts 畫全部（K 線效能是當初選 Lightweight Charts 的理由，見 plan 的選型表）。
+- 影響：`web/src/components/CandleChart.tsx` 由 `ChartStack.tsx` 取代並刪除；堆疊柱列為 M3 待辦。若 M3 升級到 v5，`chartSync.ts` 這層抽象剛好是唯一要改的地方。

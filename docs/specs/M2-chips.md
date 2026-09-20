@@ -2981,7 +2981,7 @@ M1 的 V-1 ～ V-8 若仍未回報，不影響 M2 的本環境驗收，但**在�
 | T2-1 | 技術債：回補收進 CLI（U-9）、`daily_price` 索引（U-14）、備份腳本（U-12） | — | DONE | [T2-1](../reviews/T2-1.md) |
 | T2-2 | Migration 0004：籌碼四表與 `models.py` 五個 dataclass | T2-1 | DONE | [T2-2](../reviews/T2-2.md) |
 | T2-3 | 集保股權分散（TDCC）端到端：parser → loader → job → CLI → 每週排程 | T2-2 | DONE | [T2-3](../reviews/T2-3.md) |
-| T2-4 | 來源 parser：三大法人（上市 T86、上櫃含舊版備援） | T2-2 | TODO | — |
+| T2-4 | 來源 parser：三大法人（上市 T86、上櫃含舊版備援） | T2-2 | DONE | [T2-4](../reviews/T2-4.md) |
 | T2-5 | 來源 parser：融資融券（上市／上櫃）、借券賣出、外資持股 | T2-4（共用 `find_field_all`） | TODO | — |
 | T2-6 | Loader、來源登錄表、統一 job／CLI／排程／回補 | T2-4、T2-5 | TODO | — |
 | T2-7 | API：四個籌碼端點，與後端整合驗收腳本 | T2-3、T2-6 | TODO | — |

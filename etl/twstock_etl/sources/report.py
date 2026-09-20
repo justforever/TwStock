@@ -99,3 +99,57 @@ def extract_table(
 def is_no_trade(volume: int, close: Decimal | None) -> bool:
     """判斷是否為「當日無成交」：成交股數為 0 且收盤價為空或 0。"""
     return volume == 0 and (close is None or close == 0)
+
+
+def find_field_all(
+    fields: Sequence[str],
+    *tokens: str,
+    exclude: Sequence[str] = (),
+) -> int:
+    """回傳第一個「同時包含 tokens 全部關鍵字、且不含 exclude 任一關鍵字」的欄位索引。
+
+    Args:
+        fields: 欄位名稱清單
+        tokens: 必須全部出現在欄位名稱裡的關鍵字
+        exclude: 只要出現任一個就排除該欄位
+
+    Raises:
+        SourceFormatError: 找不到
+    """
+    from twstock_etl.numbers import clean_cell
+
+    # 先找不包含括號的精確匹配（優先級較高）
+    for i, field in enumerate(fields):
+        if '(' in field or ')' in field:
+            continue
+        cleaned = clean_cell(field)
+        # 檢查所有 tokens 是否都在欄位名稱內
+        if not all(token in cleaned for token in tokens):
+            continue
+        # 檢查是否包含任一個 exclude 的關鍵字
+        if any(exc in cleaned for exc in exclude):
+            continue
+        return i
+
+    # 如果沒有找到，再尋找包含括號的欄位
+    for i, field in enumerate(fields):
+        cleaned = clean_cell(field)
+        # 檢查所有 tokens 是否都在欄位名稱內
+        if not all(token in cleaned for token in tokens):
+            continue
+        # 檢查是否包含任一個 exclude 的關鍵字
+        if any(exc in cleaned for exc in exclude):
+            continue
+        return i
+
+    raise SourceFormatError(f"找不到欄位：所有必要關鍵字 {tokens}，排除關鍵字 {exclude}")
+
+
+def find_field_all_optional(
+    fields: Sequence[str], *tokens: str, exclude: Sequence[str] = ()
+) -> int | None:
+    """同 find_field_all，但找不到時回 None（給「舊格式沒有這一欄」的情況用）。"""
+    try:
+        return find_field_all(fields, *tokens, exclude=exclude)
+    except SourceFormatError:
+        return None

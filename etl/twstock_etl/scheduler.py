@@ -24,7 +24,7 @@ TAIPEI = ZoneInfo("Asia/Taipei")
 def _log_job_outcome(what: str, result) -> None:
     """統一記錄 job 結果：被略過記「略過」，實際執行記筆數。
 
-    result 需有 rows: int 與 skip_reason: str | None（見規格 §3 共同契約、D-024）。
+    result 需有 rows: int 與 skip_reason: str | None（見規格 §3 共同契約、D-028）。
 
     Args:
         what: 這次 job 的描述，例如「2026-09-18 TWSE 日成交」

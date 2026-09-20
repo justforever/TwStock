@@ -3,7 +3,7 @@
 - 里程碑：M1 價格 + K 線（見 `docs/plan.md`「開發里程碑」）
 - 作者：Architect（claude-opus-5）｜ 日期：2026-09-19
 - 前一里程碑：`docs/specs/M0-skeleton.md`、驗收報告 `docs/reports/M0.md`
-- 相關決策：`docs/decisions.md`（沿用 D-001 ～ D-014，新增 D-016 ～ D-026）
+- 相關決策：`docs/decisions.md`（沿用 D-001 ～ D-014，新增 D-016 ～ D-028；其中 D-024 一度有兩筆重複編號，較晚補記的那筆已於 2026-09-21 改編為 D-028）
 
 ## 0. 目標與完成標準
 
@@ -1092,7 +1092,7 @@ cd /home/claude/TwStock && TWSTOCK_TEST_DATABASE_URL=$(scripts/pg_temp.sh start)
 | `etl/tests/test_etl_loaders.py`、`test_etl_cli.py`、`test_etl_scheduler.py` | 修改：跟著新行為調整 |
 
 **這張表以外的 production 程式不准動**，尤其是 `etl/twstock_etl/loaders/job_log.py`
-（T1-3 已審查 DONE，`JobSkipped` 不往外拋是既定契約，見 D-024）與 `etl/twstock_etl/sources/`。
+（T1-3 已審查 DONE，`JobSkipped` 不往外拋是既定契約，見 D-028）與 `etl/twstock_etl/sources/`。
 真的覺得非改不可，先停下來回報，由 Architect 改規格，不要自己改實作再回頭改測試斷言。
 
 ### 1. `jobs.py`：U-3 停用保護改相對比例
@@ -1164,7 +1164,7 @@ def rebuild_calendar_from_index(
 
 ### 3. `jobs.py`：價格 job
 
-**共同契約（三個價格 job 函式一律照此，見 D-024；第 1～3 輪審查的 Blocker 全部出在這一段沒有寫清楚）**
+**共同契約（三個價格 job 函式一律照此，見 D-028；第 1～3 輪審查的 Blocker 全部出在這一段沒有寫清楚）**
 
 1. 每個 job 函式回傳自己的 `@dataclass(frozen=True)`，欄位一律包含 `rows: int` 與
    `skip_reason: str | None = None`。`skip_reason is None` 代表這次真的有執行；不是 `None`
@@ -1488,7 +1488,7 @@ cd /home/claude/TwStock && /usr/lib/postgresql/16/bin/psql "${DATABASE_URL/postg
 訂了結果物件，另外兩個 job 寫「回傳筆數」，也沒訂 skip 要怎麼傳給呼叫端、scheduler wrapper
 要怎麼記 log、哪些呼叫端必須跟著改——所以每修一處就冒出下一處。規格側的洞已經在上面補好
 （§3 共同契約、§3.1 `etl_job_log` 包裝、§4 skip 輸出、§5 `_log_job_outcome`、§6 測試，
-以及 `docs/decisions.md` 的 D-024／D-025／D-026）。**這一輪請只做下面這幾件事，不要重構其他東西。**
+以及 `docs/decisions.md` 的 D-028／D-025／D-026）。**這一輪請只做下面這幾件事，不要重構其他東西。**
 
 #### 1.（Blocker 4）`etl/twstock_etl/scheduler.py`：wrapper 沒跟著 dataclass 回傳型別一起改
 
@@ -2028,7 +2028,7 @@ from datetime import datetime, timedelta
 def _log_job_outcome(what: str, result) -> None:
     """統一記錄 job 結果：被略過記「略過」，實際執行記筆數。
 
-    result 需有 rows: int 與 skip_reason: str | None（見規格 §3 共同契約、D-024）。
+    result 需有 rows: int 與 skip_reason: str | None（見規格 §3 共同契約、D-028）。
 
     Args:
         what: 這次 job 的描述，例如「2026-09-18 TWSE 日成交」
@@ -3498,6 +3498,11 @@ cd /home/claude/TwStock && docker compose -f deploy/docker-compose.yml --env-fil
 | T1-5 | 回補腳本：速率限制、斷點續傳、進度輸出 | T1-4a～T1-4d 全數 DONE | DONE | 審查報告 `docs/reviews/T1-5.md`（第 3 輪 APPROVE）；Coder 自述見 `docs/reviews/T1-5-coder-notes.md` |
 | T1-6 | API：個股明細、日 K（含還原）、指數、ETL 狀態 | T1-5（驗收要用回補後的資料） | DONE | 審查報告 `docs/reviews/T1-6.md`（第 1 輪 APPROVE） |
 | T1-7 | Web：個股 K 線頁、ETL 狀態頁，與 M1 整合驗收 | T1-6 | DONE | 審查報告 `docs/reviews/T1-7.md`（第 2 輪 APPROVE）|
+
+> **里程碑驗收（2026-09-21，Architect）**：T1-1 ～ T1-7 全部 APPROVE，
+> 乾淨狀態下重跑後端測試（216 passed / 1 skipped）、前端測試與建置（23 passed、tsc 0 error）、
+> `docker compose config`、`scripts/m1_verify.sh`（`M1 VERIFY PASSED`，連跑三次皆通過），**M1 結論 PASS**。
+> 驗收報告與未解問題見 `docs/reports/M1.md`；真實來源、`up --build`、hypertable、5 年回補實跑仍留 §7 的 V-1 ～ V-8。
 
 > **狀態表修正紀錄（2026-09-19，Architect）**：上一輪流程中 Reviewer 誤把主對話裡使用者詢問進度的訊息當成中止指令，
 > T1-4c、T1-4d、T1-5、T1-6 都沒有真的審查，狀態表卻被標成 BLOCKED。

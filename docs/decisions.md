@@ -2,6 +2,8 @@
 
 格式：編號、日期、決策、理由、替代方案（與為何不選）、影響範圍。新決策往下加，推翻舊決策時新增一筆並在舊決策標註「已由 D-xxx 取代」。
 
+編號一旦發出就不再回收或重排；若發現重複編號，保留先發出的那一筆，較晚補記的那一筆改用尚未使用過的新編號並同步更新所有引用（見 D-028）。
+
 ---
 
 ## D-001　個股清單來源：TWSE ISIN 一覽表（上市 strMode=2、上櫃 strMode=4）
@@ -93,7 +95,7 @@
 - 決策：來源 `https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule`（當年度）。`build_calendar(year, holidays)`：休市條目 → 休市；週末 → 休市（note「週末」）；其餘平日 → 開市。名稱或說明含「開始交易」「最後交易」的條目是**開市日**，不能當休市；「市場無交易，僅辦理結算交割作業」視為休市。資料不含目標年份時拋錯，不產生「全平日開市」的錯誤日曆。
 - 理由：官方公告最準；規則簡單可測。
 - 限制：OpenAPI 只給當年度。歷史年度日曆（5 年回補需要）延到 M1，屆時以 TWSE 網站報表端點查歷年休市日，或由大盤日 K 實際有交易的日期反推。
-- **年度涵蓋範圍已由 D-020 延伸**（2026-09-19，M1）：每日 job 改為刷新今年＋明年，歷史年度改由 TAIEX 指數交易日反推。`build_calendar` 本身的規則不變。
+- **年度涵蓋範圍已由 D-021 延伸**（2026-09-19，M1）：每日 job 改為刷新今年＋明年，歷史年度改由 TAIEX 指數交易日反推。`build_calendar` 本身的規則不變。
 - 替代方案：寫死假日表（每年要人工維護）；`holidays` 等第三方套件（沒有台股特有的封關/開紅盤與結算交割日）。
 
 ## D-012　個股下市處理：預設不停用，需明確開啟且有筆數保護
@@ -102,7 +104,7 @@
 - 決策：`upsert_stocks` 只新增/更新並把出現的個股設為 `is_active=true`；把「清單中消失」的個股設為 `is_active=false` 需呼叫端傳 `deactivate=True`（排程 job 會開，CLI 需 `--deactivate-missing`），且該市場解析筆數 < 500 時拒絕執行（在寫入前拋錯）。代號不刪除、不重用。
 - 理由：來源偶發回傳不完整頁面時，若自動停用會讓大量個股從搜尋消失；上市、上櫃實際各有數百到上千檔，500 是保守下限。
 - 替代方案：每次都同步停用（風險如上）；軟刪除到另一張歷程表（M0 不需要，plan 中「變更歷程表」留待有需求時做）。
-- **筆數保護部分已由 D-019 取代**（2026-09-19，M1）：絕對門檻 500 筆改為相對比例 70%。本決策的其餘內容（預設不停用、需明確傳 `deactivate=True`、代號不刪除不重用）仍然有效。
+- **筆數保護部分已由 D-020 取代**（2026-09-19，M1）：絕對門檻 500 筆改為相對比例 70%。本決策的其餘內容（預設不停用、需明確傳 `deactivate=True`、代號不刪除不重用）仍然有效。
 
 ## D-013　搜尋實作：ILIKE + 臺/台正規化，不用 pg_trgm 與拼音
 
@@ -220,19 +222,14 @@
 - 替代方案：M1 一次做滿（任務數與未驗證端點數同時翻倍，違反「每階段結束都是可用系統」的節奏）。
 - 影響：schema 已保留擴充空間——`index_daily` 主鍵含 `index_id`，`adj_factor` 有 `source` 欄位，兩者加來源都不必改結構。上櫃個股在 M1 勾選「還原價」時看到的就是原始 K 線，前端不必特別處理。
 
-## D-024　ETL job 函式一律回傳結果物件；`JobSkipped` 不跨函式邊界傳播
-
-- 日期：2026-09-19（M1，T1-4 第 3 輪審查後補記）
-- 決策：`jobs.py` 中每個 job 函式都回傳自己的 `@dataclass(frozen=True)`，欄位一律包含 `rows: int` 與 `skip_reason: str | None`（`PriceJobResult`、`IndexJobResult`、`AdjFactorJobResult`），不准回傳裸 `int`。`loaders/job_log.py` 的 `job_run` 維持 T1-3 定案的契約——`JobSkipped` 由 `job_run` 攔下記成 `status='skipped'`、**不往外拋**；job 函式把 `run.note` 原樣放進 `skip_reason`，呼叫端（CLI、`scheduler.py`、T1-5 回補）一律看回傳值，**全專案不准出現 `except JobSkipped`**。job 函式結尾只能有一個 `return`，所有回傳值用到的區域變數在進 `with job_run(...)` 之前就給好預設值。
-- 理由：T1-4 連續三輪 REQUEST_CHANGES 的 Blocker 全部源自這個契約沒被寫清楚：(1) 第 1 輪為了讓 skip 傳到 CLI 而改掉 `job_log.py`，讓排程器把每天正常的「已完成，略過」用 `logger.exception` 記成 ERROR；(2) 第 2 輪只修了三個 job 中的一個，另外兩個在 skip 後回傳未賦值的區域變數而拋 `UnboundLocalError`，CLI 還留下 `except JobSkipped` 死碼造成 `NameError`；(3) 第 3 輪回傳型別從 `int` 改成 dataclass，`scheduler.py` 兩個呼叫端沒跟著改，`logger.info("… %d 筆", result)` 在 `logging` 內部拋 `TypeError`。「略過」是每日排程的正常路徑（見 D-021），用例外表達它，就等於讓正常路徑不斷踩到呼叫端的錯誤處理；用回傳值表達，型別檢查與測試都看得見。單一 `return` + 事先初始化則讓 `UnboundLocalError` 這一類缺陷結構上不可能發生。
-- 替代方案：讓 `JobSkipped` 往外拋，呼叫端各自 `except JobSkipped`（每多一個呼叫端就多一個會漏寫的地方，第 1 輪已經實證失敗）；回傳 `int | None`，`None` 代表 skip（丟失 skip 原因，CLI 印不出 `reason=`）；改用 `typing.Protocol` 或共用基底 dataclass（對能力有限的 Coder 而言抽象成本高於收益，三個 dataclass 各自扁平就夠）。
-- 影響：T1-5 `backfill.py` 的斷點續傳直接讀 `result.skip_reason` 判斷是否計入 `skipped`，不必包 `try/except`；T1-6 不直接呼叫 job 函式，不受影響。規格 `docs/specs/M1-price.md` §T1-4 已同步改寫（§3 共同契約、§4 skip 輸出格式、§5 `_log_job_outcome`）。
+> 註：原本這個位置還有第二筆同樣編號為 `D-024` 的決策（ETL job 函式一律回傳結果物件），
+> 編號與上面這筆重複，2026-09-21 里程碑驗收時改編為 **D-028**，內容不變，移到文件最後。
 
 ## D-025　每個會寫資料庫的 ETL job 函式都要包 `job_run`；`etl_job_log` 不得出現「正常路徑被記成 failed」
 
 - 日期：2026-09-19（M1，T1-4 第 3 輪審查後補記）
 - 決策：`refresh_stock_list`（`stock_list_twse` / `stock_list_tpex`）、`refresh_trading_calendar`（`trading_calendar`）、`rebuild_calendar_from_index`（`calendar_from_index`）比照三個價格 job 各包一層 `job_run`，簽名與回傳值不變。這些 job 不做 `has_successful_run` 去重、也不會 skip。「官方尚未公布明年度日曆」這種預期內的情況，必須在**進入 `job_run` 之前**判斷掉，只記 INFO，不可以留下 `status='failed'` 的列；`refresh_calendar_with_next_year` 因此改成「下載／解析一次 → 每年各 `build_calendar` → 私有 `_write_calendar_year` 寫入並記錄」。
-- 理由：`etl_job_log` 是 ETL 狀態頁（規格 §5.4／§5.5）唯一的資料來源，也是 D-021 去重與 T1-5 斷點續傳的依據。規格 §4 的 job 名稱表從 T1-3 起就列了 `stock_list_*` 與 `trading_calendar`，但實作三輪都沒補上，等於每天真的在跑的兩個 job 在狀態頁上完全空白。同時，「近 7 天失敗次數」這個欄位只有在「失敗」真的代表異常時才有意義——把可預期的略過或尚未公布記成 failed，會讓這個欄位永遠是雜訊，和 D-024 要解決的是同一類問題（正常路徑污染錯誤訊號）。
+- 理由：`etl_job_log` 是 ETL 狀態頁（規格 §5.4／§5.5）唯一的資料來源，也是 D-022 去重與 T1-5 斷點續傳的依據。規格 §4 的 job 名稱表從 T1-3 起就列了 `stock_list_*` 與 `trading_calendar`，但實作三輪都沒補上，等於每天真的在跑的兩個 job 在狀態頁上完全空白。同時，「近 7 天失敗次數」這個欄位只有在「失敗」真的代表異常時才有意義——把可預期的略過或尚未公布記成 failed，會讓這個欄位永遠是雜訊，和 D-028 要解決的是同一類問題（正常路徑污染錯誤訊號）。
 - 替代方案：只有價格 job 記錄（狀態頁看不到個股清單與日曆，使用者最想確認的「今天清單有沒有更新」反而查不到）；由 `scheduler.py` 的 wrapper 負責記錄（CLI 手動執行就不會留紀錄，且回補腳本也要各記一次，實作會重複三份）。
 - 影響：`etl_job_log` 列數增加（每天約 4 列）；T1-5 `backfill_calendar` 直接呼叫 `rebuild_calendar_from_index` 即可，不要再包一層 `job_run`；T1-6 `/api/etl/summary` 會多出三個 `job_name` 的列。
 
@@ -262,3 +259,11 @@
 - 理由：這次事故的三個缺陷（審查被跳過、commit 標題與內容不符、實作自述冒充審查報告）都會讓「狀態表」這個唯一的進度真相來源失真，而後續任務的相依判斷完全靠它——T1-5 的相依條件正是「T1-4a～T1-4d 全數 DONE」，在 T1-4c 未審、T1-4d 未做的情況下 T1-5 的程式就已經進了 `main`。把 commit 權收斂到 Architect、把審查報告的寫作權收斂到 Reviewer，是讓「檔案存在」這件事重新等於「有人真的看過」的最小改動。
 - 替代方案：允許 Coder commit 但要求 commit 訊息自我標註「未審查」（同樣依賴自律，且 `main` 上仍會有未審程式）；用 git hook 擋 Coder 的 commit（本環境沒有可靠的角色識別，擋不住）；把審查報告改放別的目錄（換位置不解決「誰寫的」這個根本問題）。
 - 影響：`main` 上目前有兩份未審程式（T1-4c 的 `scheduler.py`、T1-5 的 `backfill.py` + `scripts/backfill.py`），已在狀態表標為 `IN_REVIEW`，下一輪先補審再往下做；不做 revert，避免重寫已在 `main` 的歷史。往後每個任務的收斂順序固定為：Coder 改檔 → Reviewer 寫 `docs/reviews/<任務>.md` → Architect 改狀態表並 commit。
+
+## D-028　ETL job 函式一律回傳結果物件；`JobSkipped` 不跨函式邊界傳播
+
+- 日期：2026-09-19（M1，T1-4 第 3 輪審查後補記；原誤編為第二筆 `D-024`，2026-09-21 里程碑驗收時改編為 D-028）
+- 決策：`jobs.py` 中每個 job 函式都回傳自己的 `@dataclass(frozen=True)`，欄位一律包含 `rows: int` 與 `skip_reason: str | None`（`PriceJobResult`、`IndexJobResult`、`AdjFactorJobResult`），不准回傳裸 `int`。`loaders/job_log.py` 的 `job_run` 維持 T1-3 定案的契約——`JobSkipped` 由 `job_run` 攔下記成 `status='skipped'`、**不往外拋**；job 函式把 `run.note` 原樣放進 `skip_reason`，呼叫端（CLI、`scheduler.py`、T1-5 回補）一律看回傳值，**全專案不准出現 `except JobSkipped`**。job 函式結尾只能有一個 `return`，所有回傳值用到的區域變數在進 `with job_run(...)` 之前就給好預設值。
+- 理由：T1-4 連續三輪 REQUEST_CHANGES 的 Blocker 全部源自這個契約沒被寫清楚：(1) 第 1 輪為了讓 skip 傳到 CLI 而改掉 `job_log.py`，讓排程器把每天正常的「已完成，略過」用 `logger.exception` 記成 ERROR；(2) 第 2 輪只修了三個 job 中的一個，另外兩個在 skip 後回傳未賦值的區域變數而拋 `UnboundLocalError`，CLI 還留下 `except JobSkipped` 死碼造成 `NameError`；(3) 第 3 輪回傳型別從 `int` 改成 dataclass，`scheduler.py` 兩個呼叫端沒跟著改，`logger.info("… %d 筆", result)` 在 `logging` 內部拋 `TypeError`。「略過」是每日排程的正常路徑（見 D-022），用例外表達它，就等於讓正常路徑不斷踩到呼叫端的錯誤處理；用回傳值表達，型別檢查與測試都看得見。單一 `return` + 事先初始化則讓 `UnboundLocalError` 這一類缺陷結構上不可能發生。
+- 替代方案：讓 `JobSkipped` 往外拋，呼叫端各自 `except JobSkipped`（每多一個呼叫端就多一個會漏寫的地方，第 1 輪已經實證失敗）；回傳 `int | None`，`None` 代表 skip（丟失 skip 原因，CLI 印不出 `reason=`）；改用 `typing.Protocol` 或共用基底 dataclass（對能力有限的 Coder 而言抽象成本高於收益，三個 dataclass 各自扁平就夠）。
+- 影響：T1-5 `backfill.py` 的斷點續傳直接讀 `result.skip_reason` 判斷是否計入 `skipped`，不必包 `try/except`；T1-6 不直接呼叫 job 函式，不受影響。規格 `docs/specs/M1-price.md` §T1-4 已同步改寫（§3 共同契約、§4 skip 輸出格式、§5 `_log_job_outcome`）。

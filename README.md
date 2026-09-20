@@ -9,7 +9,9 @@
 
 **M0（骨架）已完成並通過里程碑驗收**（報告：[docs/reports/M0.md](docs/reports/M0.md)；規格：[docs/specs/M0-skeleton.md](docs/specs/M0-skeleton.md)）。
 
-**M1（價格 + K 線）已完成並通過里程碑驗收**（規格：[docs/specs/M1-price.md](docs/specs/M1-price.md)；驗收：`scripts/m1_verify.sh`）。
+**M1（價格 + K 線）已完成並通過里程碑驗收**（2026-09-21；規格：[docs/specs/M1-price.md](docs/specs/M1-price.md)；驗收報告：[docs/reports/M1.md](docs/reports/M1.md)；驗收腳本：`scripts/m1_verify.sh`）。
+
+驗收在開發環境以離線 fixture 跑完整條路徑（臨時 PostgreSQL → migration → 回補 → API → 數值核對）。**真實來源連線、`docker compose up --build`、TimescaleDB hypertable、5 年回補實跑只能在你的 Mac 上驗證**，逐項清單見 [docs/reports/M1.md](docs/reports/M1.md)「只能在 Mac 上驗證的項目」與規格 §7。
 
 目前可用的功能：
 
@@ -115,51 +117,116 @@ docker compose -f deploy/docker-compose.yml exec etl \
 
 其他選項：
 
-- `--deactivate-missing`：把「這次清單中已消失」的個股標成 `is_active=false`（下市處理）。排程器每日自動帶這個旗標；手動執行預設不帶，較安全。有保護機制：若這次解析出的筆數少於 500（`twstock_etl.jobs.MIN_RECORDS_FOR_DEACTIVATE`），會直接丟 `SourceFormatError` 拒絕停用，避免來源異常時把整個市場誤停用。
+- `--deactivate-missing`：把「這次清單中已消失」的個股標成 `is_active=false`（下市處理）。排程器每日自動帶這個旗標；手動執行預設不帶，較安全。有保護機制：若這次解析出的筆數不到「該市場目前有效檔數」的 70%（`twstock_etl.jobs.DEACTIVATE_MIN_RATIO`），會直接丟 `SourceFormatError` 拒絕停用，避免來源回傳不完整頁面時把整個市場誤停用（見 `docs/decisions.md` D-020）。
 - `--year 2027`：指定交易日曆年份。
 - `--file <路徑>`：改讀本機檔案而非連網（ISIN 為 UTF-8 HTML、日曆為 JSON），用於離線測試。
 
 若首次執行就噴 `SourceFormatError`，代表官方頁面格式與 parser 預期不符，請把實際回應存檔後更新 `etl/tests/fixtures/` 與 `etl/twstock_etl/sources/`，並在 `docs/decisions.md` 補記。
 
-### 6. 歷史回補（5年資料）
+### 6. 歷史回補（5 年資料）——在 Mac 上怎麼跑
 
-初次開發或環境重建時，需要補回 5 年的歷史數據。`scripts/backfill.py` 提供四個子指令：
+初次建置或環境重建時要補回 5 年歷史。回補全部由 `scripts/backfill.py` 完成（四個子指令：`index`、`calendar`、`price`、`exright`）。
+
+#### 6.1 前置條件
+
+1. DB 已啟動、`migrate` 已跑完（`docker compose … logs migrate` 看得到 `upgrade head`）。
+2. **個股清單已載入**（第 5 節）。日 K 寫入時會用 `stock` 表過濾未知代號，清單沒載會整批被丟掉（`rows=0`）。
+3. **`scripts/` 沒有打包進 `twstock-etl` 映像**（映像只裝 `db/`、`etl/` 兩個套件），所以回補腳本不能用 `docker compose exec etl python scripts/backfill.py`。用下面兩種方式之一：
+
+**做法 A（建議）：在 Mac 上用 venv 跑，連 compose 的 DB**
 
 ```bash
-# 查看用法
-scripts/backfill.py --help
-
-# 建議的執行順序：
-
-# 1. 先載入個股清單（見上方第 5 節）
-.venv/bin/python -m twstock_etl.cli load-stocks --market TWSE
-.venv/bin/python -m twstock_etl.cli load-stocks --market TPEx
-
-# 2. 加權指數月度資料（約 60 次 API 請求，預設 3 秒延遲）
-.venv/bin/python scripts/backfill.py index --from 2021-01 --to 2026-09
-
-# 3. 反推交易日曆（無 API 請求，用指數日期推算）
-.venv/bin/python scripts/backfill.py calendar --from-year 2021 --to-year 2025
-
-# 4. 上市個股日 K（TWSE，約 1,200 次 API 請求，預設約需 1 小時）
-.venv/bin/python scripts/backfill.py price --market TWSE --from 2021-01-04 --to 2026-09-18
-
-# 5. 上櫃個股日 K（TPEx，約 1,200 次 API 請求，預設約需 1 小時）
-.venv/bin/python scripts/backfill.py price --market TPEx --from 2021-01-04 --to 2026-09-18
-
-# 6. 除權息資料（約每個月 1 次 API 請求）
-.venv/bin/python scripts/backfill.py exright --from 2021-01-01 --to 2026-09-18
+cd ~/path/to/TwStock
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+# 密碼用 .env 裡的 POSTGRES_PASSWORD；compose 已把 5432 綁在 127.0.0.1，host 連得到
+export DATABASE_URL="postgresql+psycopg://twstock:<你的密碼>@127.0.0.1:5432/twstock"
+.venv/bin/python scripts/backfill.py --help
 ```
 
-各指令支援以下選項：
+**做法 B：不想在 Mac 裝 Python，就把 `scripts/` 掛進容器跑一次性任務**
 
-- `--sleep SECONDS`：兩次 API 請求間隔（預設 3.0 秒）
-- `--max-failures N`：容許最多失敗次數，超過即中止（預設 10）
-- `--force`：強制重新抓取，不使用斷點續傳（預設優先跳過已完成日期）
-- `--source-dir PATH`：離線模式，從目錄讀 JSON 檔案而不發 HTTP 請求（用於開發測試）
-- `--dry-run`：只印執行計畫，不寫 DB、不發 HTTP
+```bash
+docker compose -f deploy/docker-compose.yml --env-file .env run --rm \
+  -v "$PWD/scripts:/app/scripts" etl \
+  python /app/scripts/backfill.py price --market TWSE --from 2021-01-04 --to 2026-09-18
+```
 
-任何時候都可以按 Ctrl-C 中斷，重新執行時會自動從中斷處繼續（用 `etl_job_log` 表追蹤進度）。
+（`run --rm` 會沿用 `etl` service 的 `DATABASE_URL`，不必自己組連線字串。）
+
+#### 6.2 執行順序與預估時間
+
+順序不能換：日 K 只回補 `trading_calendar` 裡 `is_open=true` 的日期，而歷史年度的日曆是由加權指數反推出來的（見 `docs/decisions.md` D-021）。
+
+| # | 指令（以 2021-01-04 ～ 2026-09-18 為例） | 請求數 | `--sleep 3` 預估 |
+| --- | --- | --- | --- |
+| 1 | `python -m twstock_etl.cli load-stocks --market TWSE` / `--market TPEx` | 2 | < 1 分鐘 |
+| 2 | `python -m twstock_etl.cli load-calendar`（今年，官方休市日） | 1 | 數秒 |
+| 3 | `scripts/backfill.py index --from 2021-01 --to 2026-09` | 約 69（每月 1 次） | 約 5 分鐘 |
+| 4 | `scripts/backfill.py calendar --from-year 2021 --to-year 2025` | 0（用指數反推） | 數秒 |
+| 5 | `scripts/backfill.py price --market TWSE --from 2021-01-04 --to 2026-09-18` | 約 1,220（每交易日 1 次） | 約 1～1.5 小時 |
+| 6 | `scripts/backfill.py price --market TPEx --from 2021-01-04 --to 2026-09-18` | 約 1,220 | 約 1～1.5 小時 |
+| 7 | `scripts/backfill.py exright --from 2021-01-01 --to 2026-09-18` | 約 69（每月 1 次） | 約 5 分鐘 |
+
+**整趟約 3 小時**（`--sleep 3`，實際受來源回應速度影響）。完成後 `daily_price` 約 240 萬列（上市＋上櫃 × 5 年），連同索引大約佔 0.5～1 GB 磁碟。
+
+`--sleep` 是禮貌性速率限制，不建議調到 1 秒以下；來源回 429 或連線被掐時反而更慢。
+
+建議讓 Mac 不要睡著，並把輸出留成 log：
+
+```bash
+caffeinate -i .venv/bin/python scripts/backfill.py price --market TWSE \
+  --from 2021-01-04 --to 2026-09-18 2>&1 | tee -a ~/twstock-backfill-TWSE.log
+```
+
+進度每個工作單位印一行：
+
+```
+[  12/1220] 2021-01-20 TWSE rows=1024 elapsed=00:00:38 eta=01:02:15
+[  13/1220] 2021-01-21 TWSE skip 已完成
+[  14/1220] 2021-01-22 TWSE FAIL 來源回應 stat 非 OK：很抱歉
+完成 1180／跳過 38／失敗 2，共寫入 1203456 筆，耗時 01:07:42
+```
+
+#### 6.3 中斷與續傳
+
+- **隨時可以 Ctrl-C**。腳本會印 `已中斷，下次執行會從 YYYY-MM-DD 繼續`（stderr），離開碼 `130`。
+- **續傳就是把同一條指令再跑一次**，不必改參數。每個日期（或月份）成功後會在 `etl_job_log` 留一筆 `success`，重跑時以 `has_successful_run` 判斷並印 `skip 已完成`，不會重抓。
+- 斷點以「job 單位」記錄，不是檔案位移，所以續跑時把 `--from` 往前拉、或整段重跑都沒關係，重疊的部分一律被 skip。
+- 關機、睡眠、網路斷線、容器重啟都不影響續傳——狀態全在資料庫裡。
+- 看目前進度：`http://localhost:8080/admin/etl`，或
+
+```bash
+docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -c \
+  "SELECT job_name, max(target_date) FILTER (WHERE status='success') AS 最新成功日
+     FROM etl_job_log GROUP BY job_name ORDER BY job_name;"
+```
+
+#### 6.4 失敗了怎麼重來
+
+| 狀況 | 現象 | 處理 |
+| --- | --- | --- |
+| 個別日期失敗 | 該行印 `FAIL …`，腳本繼續往下跑，結束時離開碼 `1` | **直接重跑同一條指令**。失敗的日期沒有 `success` 紀錄，會被重抓；成功的照樣 skip |
+| 失敗次數超過 `--max-failures`（預設 10） | 印 `失敗次數超過 10，中止回補`，離開碼 `2` | 多半是來源改版或被限流。先 `--dry-run` 確認計畫，再用 `--sleep 6` 放慢重跑；若錯誤訊息是 `SourceFormatError`，把真實回應存成 `etl/tests/fixtures/` 的樣本、修 parser，並在 `docs/decisions.md` 補記（規格 §7） |
+| 某年日 K「一下就跑完、total=0」 | 該年 `trading_calendar` 沒有開市日 | 先補該年的 `index`，再跑 `calendar --from-year … --to-year …`，然後重跑 `price` |
+| `rows=0` 但沒有錯誤 | `stock` 表是空的或清單沒更新 | `SELECT count(*) FROM stock;` 應為 2,000+；否則先跑第 5 節的 `load-stocks` |
+| 來源事後更正數字，要重抓已成功的日期 | — | 用 `--force` 搭配縮小的 `--from`/`--to` 區間重跑（`--force` 會忽略斷點，整段重抓） |
+| 忘記設 `DATABASE_URL` | `錯誤：未設定 DATABASE_URL 環境變數`，離開碼 `1` | 照 6.1 `export` 後重跑 |
+
+離開碼對照：`0` 全部完成、`1` 有失敗或參數／來源錯誤、`2` 超過 `--max-failures` 中止、`130` 被 Ctrl-C 中斷。
+
+其他選項：`--sleep SECONDS`（請求間隔，預設 3.0）、`--max-failures N`（預設 10）、`--force`（忽略斷點重抓）、
+`--source-dir PATH`（離線模式，改讀目錄下的 JSON，不發 HTTP，供測試用）、`--dry-run`（只印計畫，不寫 DB、不發 HTTP）。
+
+#### 6.5 回補完成後的抽查
+
+```bash
+docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -c \
+  "SELECT source, count(*) AS 列數, min(trade_date), max(trade_date) FROM daily_price GROUP BY source;"
+docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -c \
+  "SELECT count(*) FROM adj_factor;"
+```
+
+再開 <http://localhost:8080/stock/2330>，切到 5Y、勾「還原價」，和券商軟體或 FinMind 的還原價比對最近一次除權息前後（規格 §7 V-7）。
 
 ## 本機開發（無 Docker）
 

@@ -371,3 +371,41 @@
   - 單一 effect 重建的成本只在使用者切換區間／還原價／副圖開關時發生（每次數百到上千根 K 棒，遠低於 Lightweight Charts 的負荷），換來的是 M1 T1-4 那種「狀態機沒同步」的缺陷結構上不可能發生。
 - 替代方案：升級到 lightweight-charts v5 用原生多 pane（M1 才剛把 v4 API 寫穩，升版是另一個里程碑的事）；用一張 chart 疊多個 `priceScaleId` 與 `scaleMargins` 切出上下區塊（十字線是共用的，但每個區塊的價格軸刻度會互相干擾，且 y 軸讀數無法分開格式化）；改用 ECharts 畫全部（K 線效能是當初選 Lightweight Charts 的理由，見 plan 的選型表）。
 - 影響：`web/src/components/CandleChart.tsx` 由 `ChartStack.tsx` 取代並刪除；堆疊柱列為 M3 待辦。若 M3 升級到 v5，`chartSync.ts` 這層抽象剛好是唯一要改的地方。
+
+## D-040　副圖序列在前端換算成「張」；DB 與 API 一律維持「股」
+
+- 日期：2026-09-21（M3-0，T3-0-1）
+- 決策：`web/src/components/ChartStack.tsx` 三個副圖（成交量、三大法人買賣超、融資融券餘額）的 `setData` 值與對應的 `valueByTime`，一律套 `chipMath.lotsValue(shares) = Math.round(shares / 1000)` 換算成張，與既有的 pane 標題「（張）」及讀數面板的 `toLots()` 對齊。換算**只在前端顯示層**做：資料庫、loader、API 回應的股數單位仍然是「股」（`CLAUDE.md` 慣例、D-036）。`toLots()` 改成呼叫 `lotsValue()`，兩邊共用同一個四捨五入，因此 y 軸讀到的數字與讀數面板的數字**完全相同**。主圖 K 線與 MA 畫的是價格、不是股數，不換算。
+- 理由：
+  - 這是 M2 報告 §3.2 的 U-17，也是全專案**唯一使用者在畫面上看得到的數字矛盾**：標題與讀數面板說張、y 軸刻度是股，差 1000 倍。T2-8 審查已認定這是 M2 規格自身的字面矛盾（§4 要求標題寫張、資料表沒要求換算），不是 Coder 偏離。
+  - 兩個方向都能消除矛盾，選「資料配合標題」而不是「標題改成股」：台股看盤習慣以張為單位，成交量 30,000 張比 30,000,000 股好讀；而且讀數面板與籌碼分頁（`ChipTab.tsx` 表格、「最近 20 日法人買賣超（張）」）都已經是張，改標題要同步改的地方反而更多、更容易漏。
+  - 換算放在顯示層而不是 API：API 的股數單位與 DB 一致這條不變量（D-036 建立的）不能為了畫面好看而破壞；而且籌碼 API 之後還會被排行／選股器等非圖表的消費端使用。
+- 替代方案：
+  - 把三個 pane 標題改成「（股）」並把讀數面板與籌碼分頁的 `toLots()` 全部拿掉——單位會與台股習慣不符，且要改的檔案更多。
+  - 在 API 層回張——破壞「進 DB 與出 API 的數字都是股」的不變量，寫 SQL 查詢時最容易出錯（D-036 的理由同樣適用）。
+  - 用 Lightweight Charts 的 `priceFormat.formatter` 只改 y 軸標籤文字——刻度線位置仍然是股的量級，`setCrosshairPosition` 的 y 座標也還是股，治標不治本。
+- 影響與取捨：`lotsValue` 四捨五入到整數張，**會丟掉零股精度**（例如 1,499 股 → 1 張）。這是刻意的：副圖看的是量級變化，而且讀數面板本來就已經在做同樣的四捨五入，維持兩邊同一個數字比保留小數更重要。要看精確股數請用「籌碼」分頁的表格或直接查 API。
+- 範圍：`web/src/chipMath.ts`、`web/src/components/ChartStack.tsx` 與兩支對應測試；後端零改動。**`valueByTime` 必須跟著換算**——它是 `chartSync.applyCrosshairToOthers()` 傳給 `setCrosshairPosition(value, time, series)` 的 y 座標，與序列同一個座標系，只改 `setData` 會讓十字線被畫到圖外。
+
+## D-041　不變量：每個 `on_conflict_do_update` 的 `set_` 都要有 `updated_at: func.now()`
+
+- 日期：2026-09-21（M3-0，T3-0-2）
+- 決策：所有 loader 的 `INSERT ... ON CONFLICT DO UPDATE`，`set_` 一律包含 `"updated_at": func.now()`。補上 `loaders/shareholding.py` 漏掉的那一處（U-15）。檢查方式固定為 `grep -rn 'on_conflict_do_update' etl/twstock_etl/loaders/*.py` 逐處看 `set_`，新增 loader 時審查必查這一項。
+- 理由：`updated_at` 是之後做資料新鮮度監控唯一的依據（「某張表最後一次真的被寫是什麼時候」）。漏掉時資料值會正確、冪等性也正確，但 `updated_at` 停在第一次寫入的時間，監控會把「每週都有重載」誤判成「這張表三個月沒動過」——**是一個不會被任何既有測試抓到、卻會讓維運判斷全錯的缺口**，所以升格為明文不變量而不是「順手修一下」。
+- 替代方案：
+  - 用 PostgreSQL trigger 自動更新 `updated_at`（多一層看不見的魔法，schema 要改，且 migration 成本高於 10 行 Python）。
+  - 靠審查記得——U-15 就是這樣漏掉的，所以改成「有一條可執行的 grep 檢查」。
+- 影響：Architect 已掃過全部 10 處，**只有 `loaders/shareholding.py` 一處缺**（`calendar` 1、`chip` 4、`price` 3、`stock` 1 都正確）。`db/tests/test_db_chip_tables.py` 裡那處是測試自己組的 SQL，不受此不變量約束。同時新增一個會在修好前 FAIL、修好後 PASS 的回歸測試（兩次 upsert 分屬不同 transaction，`func.now()` 是 transaction timestamp，所以斷言用嚴格大於）。
+
+## D-042　npm 弱點升級只升到「修掉 critical／high 的最低版本」，殘留 2 個 dev-only moderate 接受不修
+
+- 日期：2026-09-21（M3-0，T3-0-4）
+- 決策：`react-router-dom` 7.9.1 → **7.18.4**、`vite` 7.1.5 → **7.3.6**、`vitest` 3.2.4 → **3.2.7**，三個都精確鎖定、都不跨大版本。**不**跑 `npm audit fix --force`（它會把 `vitest` 拉到 5.0.1），**不**升 `vite@8`／`vitest@5`，**不**動 `@vitejs/plugin-react`、`react`、`react-dom`、`lightweight-charts`、`typescript`、`jsdom`、`@testing-library/*`。升完後 `npm audit` 從「5 個（1 critical／3 high／1 moderate）」變成「**2 個 moderate**」（`@vitest/mocker` 與相依它的 `vitest`），這 2 個**明確接受不修**。
+- 理由：
+  - 殘留的 2 個 moderate 要升 `vitest@5` 才能修，那是破壞性大版本；而 `vitest` 是 devDependency，不會進 `dist/`、不會上正式機，攻擊面只有開發者自己的機器。「為了 dev-only 的 moderate 去冒測試全面重寫的風險」不划算。
+  - 被修掉的那些才是真的要處理的：`react-router` 13 條 advisory 含 turbo-stream 的未授權 RCE，數量已經多到不宜再拖；`vite` 的 6 條全是 dev server 路徑穿越，同樣只在開發機，但 7.3.6 是同大版本內的小升級，成本幾乎是零，順手修掉。
+  - 不跨大版本，是因為本包是「清債」不是「換基礎設施」：`lightweight-charts` 仍鎖 4.2.3（D-039 的 v4 API 假設），`vite@8` 會連帶要求 `@vitejs/plugin-react@6`，那是另一個里程碑的事。
+- 替代方案：
+  - 全部升到最新（`vite@8`／`vitest@5`／`plugin-react@6`）——四五個大版本一起跳，一旦測試掛掉無法判斷是誰造成的。
+  - 完全不升，只記風險——`react-router` 的 critical 已經掛了兩個里程碑，不能再延。
+- 影響與已驗證事項：Architect 在寫規格前**已實跑過完整升級**：`npm test` 9 檔 57 測全過、`npm run build` 0 個 TypeScript error、bundle 406.29 kB／gzip 129.67 kB → 410.39 kB／gzip 131.01 kB（+4.1 kB）。專案只用到 `BrowserRouter`／`MemoryRouter`／`Routes`／`Route`／`Link`／`useParams` 六個 v7 穩定 API，7.18 的破壞性變更都不在其中。因此 T3-0-4 **只准動 `web/package.json` 與 `web/package-lock.json`**；若測試或 build 失敗，代表動到了不該動的東西，停下來回報而不是自行改路由程式。這個任務**獨立一輪審查**，不與其他任務混在同一輪（D-027 的精神：風險等級不同的改動要分開判斷）。

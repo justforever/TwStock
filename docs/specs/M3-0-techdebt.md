@@ -665,7 +665,7 @@ T3-0-3（U-16，三項風格債）─┘
 | --- | --- | --- | --- | --- |
 | T3-0-1 | U-17：副圖資料換算成張（新增 chipMath.lotsValue，與 pane 標題和讀數面板一致；新增 3 個前端測試） | — | DONE | `docs/reviews/T3-0-1.md` |
 | T3-0-2 | U-15：`shareholding.py` upsert 補 `updated_at` | — | DONE | `docs/reviews/T3-0-2.md` |
-| T3-0-3 | U-16：三項風格債（行為等價，只改寫法） | T3-0-1 | TODO | — |
+| T3-0-3 | U-16：三項風格債（行為等價，只改寫法） | T3-0-1 | DONE | `docs/reviews/T3-0-3.md` |
 | T3-0-4 | U-13：npm 弱點升級 | T3-0-1、T3-0-2、T3-0-3 | TODO | — |
 
 狀態語意固定四種（D-027）：`TODO`（沒做）、`IN_REVIEW`（程式已在 `main`／已回報，等待審查）、

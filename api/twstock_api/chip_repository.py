@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from sqlalchemy.sql.elements import TextClause
 
 MAX_LIMIT = 6000
 DEFAULT_LIMIT = 2000
@@ -15,11 +16,11 @@ BIG_HOLDER_LEVELS = range(12, 16)   # 400 張以上（D-038）
 RETAIL_LEVELS = range(1, 5)         # 15 張以下（D-038）
 
 
-_LATEST_DATE_SQL: dict[str, str] = {
-    "institutional": "SELECT MAX(trade_date) FROM institutional_daily WHERE stock_id = :stock_id",
-    "margin":        "SELECT MAX(trade_date) FROM margin_daily WHERE stock_id = :stock_id",
-    "foreign":       "SELECT MAX(trade_date) FROM foreign_holding WHERE stock_id = :stock_id",
-    "shareholding":  "SELECT MAX(week_date) FROM shareholding_dist WHERE stock_id = :stock_id",
+_LATEST_DATE_SQL: dict[str, TextClause] = {
+    "institutional": text("SELECT MAX(trade_date) FROM institutional_daily WHERE stock_id = :stock_id"),
+    "margin":        text("SELECT MAX(trade_date) FROM margin_daily WHERE stock_id = :stock_id"),
+    "foreign":       text("SELECT MAX(trade_date) FROM foreign_holding WHERE stock_id = :stock_id"),
+    "shareholding":  text("SELECT MAX(week_date) FROM shareholding_dist WHERE stock_id = :stock_id"),
 }
 
 
@@ -28,8 +29,8 @@ def latest_chip_date(conn: Connection, kind: str, stock_id: str) -> date | None:
     if kind not in _LATEST_DATE_SQL:
         raise ValueError(f"不支援的籌碼種類：{kind}")
 
-    sql_str = _LATEST_DATE_SQL[kind]
-    row = conn.execute(text(sql_str), {"stock_id": stock_id}).fetchone()
+    stmt = _LATEST_DATE_SQL[kind]
+    row = conn.execute(stmt, {"stock_id": stock_id}).fetchone()
     return row[0] if row and row[0] else None
 
 

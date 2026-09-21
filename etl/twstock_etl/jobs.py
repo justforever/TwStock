@@ -21,6 +21,7 @@ from twstock_etl.loaders.price import (
     upsert_daily_prices,
     upsert_index_daily,
 )
+from twstock_etl.loaders.shareholding import upsert_shareholding
 from twstock_etl.loaders.stock import (
     count_active_stocks,
     deactivate_missing,
@@ -28,6 +29,7 @@ from twstock_etl.loaders.stock import (
 )
 from twstock_etl.models import CalendarDay, StockRecord
 from twstock_etl.sources.isin import fetch_isin_html, parse_isin_html
+from twstock_etl.sources.tdcc import fetch_tdcc_shareholding, parse_tdcc_shareholding
 from twstock_etl.sources.tpex_price import fetch_tpex_daily, parse_tpex_daily
 from twstock_etl.sources.twse_exright import fetch_exright, parse_exright
 from twstock_etl.sources.twse_holiday import (
@@ -566,9 +568,6 @@ def load_shareholding(
     Returns:
         ShareholdingJobResult；被略過時 rows=0、skipped_unknown=0、skip_reason 為略過原因
     """
-    from twstock_etl.loaders.shareholding import upsert_shareholding
-    from twstock_etl.sources.tdcc import fetch_tdcc_shareholding, parse_tdcc_shareholding
-
     job_name = "shareholding_tdcc"
     week_date: date | None = None
     rows = 0

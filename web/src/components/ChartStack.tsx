@@ -5,7 +5,7 @@ import { PriceBar } from '../api'
 import type { InstitutionalBar, MarginBar } from '../api'
 import { simpleMovingAverage } from '../ma'
 import { applyCrosshairToOthers, crosshairTime, type SyncPane } from '../chartSync'
-import { toLots, toPercent } from '../chipMath'
+import { lotsValue, toLots, toPercent } from '../chipMath'
 
 export interface ChartStackProps {
   bars: PriceBar[]
@@ -128,12 +128,12 @@ export default function ChartStack(props: ChartStackProps) {
     volumeSeries.setData(
       validBars.map((bar) => ({
         time: bar.time,
-        value: bar.volume,
+        value: lotsValue(bar.volume),
         color: bar.close! >= bar.open! ? '#d32f2f' : '#2e7d32',
       }))
     )
 
-    const valueByTimeVolume = new Map(validBars.map((bar) => [bar.time, bar.volume]))
+    const valueByTimeVolume = new Map(validBars.map((bar) => [bar.time, lotsValue(bar.volume)]))
 
     panes.push({
       id: 'volume',
@@ -158,13 +158,13 @@ export default function ChartStack(props: ChartStackProps) {
       instSeries.setData(
         institutional.map((bar) => ({
           time: bar.time,
-          value: bar.total_net,
+          value: lotsValue(bar.total_net),
           color: bar.total_net >= 0 ? '#d32f2f' : '#2e7d32',
         }))
       )
 
       const valueByTimeInst = new Map(
-        institutional.map((bar) => [bar.time, bar.total_net])
+        institutional.map((bar) => [bar.time, lotsValue(bar.total_net)])
       )
 
       panes.push({
@@ -192,7 +192,7 @@ export default function ChartStack(props: ChartStackProps) {
       marginSeriesBalance.setData(
         margin.map((bar) => ({
           time: bar.time,
-          value: bar.margin_balance,
+          value: lotsValue(bar.margin_balance),
         }))
       )
 
@@ -204,11 +204,11 @@ export default function ChartStack(props: ChartStackProps) {
       marginSeriesShort.setData(
         margin.map((bar) => ({
           time: bar.time,
-          value: bar.short_balance,
+          value: lotsValue(bar.short_balance),
         }))
       )
 
-      const valueByTimeMargin = new Map(margin.map((bar) => [bar.time, bar.margin_balance]))
+      const valueByTimeMargin = new Map(margin.map((bar) => [bar.time, lotsValue(bar.margin_balance)]))
 
       panes.push({
         id: 'margin',

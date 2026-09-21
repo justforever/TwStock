@@ -23,9 +23,10 @@ vi.mock('lightweight-charts', () => {
         getVisibleLogicalRange: vi.fn(() => null),
       }
       const chart: any = {
-        addCandlestickSeries: vi.fn(() => makeSeries()),
-        addLineSeries: vi.fn(() => makeSeries()),
-        addHistogramSeries: vi.fn(() => makeSeries()),
+        __series: [] as any[],
+        addCandlestickSeries: vi.fn(() => { const s = makeSeries(); chart.__series.push(s); return s }),
+        addLineSeries: vi.fn(() => { const s = makeSeries(); chart.__series.push(s); return s }),
+        addHistogramSeries: vi.fn(() => { const s = makeSeries(); chart.__series.push(s); return s }),
         removeSeries: vi.fn(),
         timeScale: () => timeScale,
         priceScale: () => ({ applyOptions: vi.fn(), width: () => 72 }),
@@ -363,5 +364,54 @@ describe('ChartStack', () => {
       charts[0].__crosshair({ time: '2026-09-18' })
     })
     expect(charts.length).toBe(initialChartsCount)
+  })
+
+  it('三個副圖的 setData 傳的是張（股 ÷ 1000）', () => {
+    render(
+      <ChartStack
+        bars={testBars}
+        institutional={testInstitutional}
+        margin={testMargin}
+        showInstitutional={true}
+        showMargin={true}
+      />
+    )
+
+    // charts[0] 主圖、charts[1] 成交量、charts[2] 三大法人、charts[3] 融資融券
+    const volumeData = charts[1].__series[0].setData.mock.calls[0][0]
+    expect(volumeData.map((d: any) => d.value)).toEqual([25000, 28000, 30000])
+
+    const instData = charts[2].__series[0].setData.mock.calls[0][0]
+    expect(instData.map((d: any) => d.value)).toEqual([6000, 9600, 13500])
+
+    const marginBalanceData = charts[3].__series[0].setData.mock.calls[0][0]
+    expect(marginBalanceData.map((d: any) => d.value)).toEqual([19500, 20000, 20200])
+
+    const shortBalanceData = charts[3].__series[1].setData.mock.calls[0][0]
+    expect(shortBalanceData.map((d: any) => d.value)).toEqual([900, 1000, 1090])
+  })
+
+  it('同步到副圖的十字線 y 值也是張，與讀數面板同一個數字', () => {
+    const { container } = render(
+      <ChartStack
+        bars={testBars}
+        institutional={testInstitutional}
+        margin={testMargin}
+        showInstitutional={true}
+        showMargin={true}
+      />
+    )
+
+    act(() => {
+      charts[0].__crosshair({ time: '2026-09-18' })
+    })
+
+    expect(charts[1].setCrosshairPosition).toHaveBeenCalledWith(30000, '2026-09-18', expect.anything())
+    expect(charts[2].setCrosshairPosition).toHaveBeenCalledWith(13500, '2026-09-18', expect.anything())
+    expect(charts[3].setCrosshairPosition).toHaveBeenCalledWith(20200, '2026-09-18', expect.anything())
+
+    const readout = container.querySelector('[data-testid="chart-readout"]') as HTMLElement
+    expect(readout.querySelector('[data-testid="readout-volume"]')).toHaveTextContent('30,000')
+    expect(readout.querySelector('[data-testid="readout-margin"]')).toHaveTextContent('20,200')
   })
 })

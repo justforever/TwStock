@@ -25,12 +25,20 @@ export function consecutiveDays(nets: number[]): { days: number; direction: 'buy
   return { days, direction }
 }
 
+/**
+ * 股 → 張的「數值」，四捨五入到整數張；例 20_200_000 → 20200。
+ * 副圖序列與讀數面板共用這個換算，兩邊的數字才會完全一樣（D-040）。
+ */
+export function lotsValue(shares: number): number {
+  return Math.round(shares / 1000)
+}
+
 /** 股 → 張的顯示字串（整數、千分位）；例 20_200_000 → "20,200"。 */
 export function toLots(shares: number | null | undefined): string {
   if (shares === null || shares === undefined) {
     return '—'
   }
-  return Math.round(shares / 1000).toLocaleString('en-US')
+  return lotsValue(shares).toLocaleString('en-US')
 }
 
 /** 百分比顯示；null → "—"；例 70 → "70.00%"。 */

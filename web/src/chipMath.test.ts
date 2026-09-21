@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { consecutiveDays, toLots, toPercent } from './chipMath'
+import { consecutiveDays, lotsValue, toLots, toPercent } from './chipMath'
 
 describe('chipMath', () => {
   it('consecutiveDays 連買 3 天', () => {
@@ -25,6 +25,13 @@ describe('chipMath', () => {
   it('consecutiveDays 最後一個是 0', () => {
     const result = consecutiveDays([1, 0])
     expect(result).toEqual({ days: 0, direction: 'none' })
+  })
+
+  it('lotsValue 回傳整數張', () => {
+    expect(lotsValue(20200000)).toBe(20200)
+    expect(lotsValue(0)).toBe(0)
+    expect(lotsValue(-5000000)).toBe(-5000)
+    expect(lotsValue(1499)).toBe(1)
   })
 
   it('toLots', () => {

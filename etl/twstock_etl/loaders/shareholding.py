@@ -3,7 +3,7 @@
 import logging
 from collections.abc import Sequence
 
-from sqlalchemy import Connection
+from sqlalchemy import Connection, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from twstock_db.tables import shareholding_dist
@@ -72,6 +72,7 @@ def upsert_shareholding(
                 "holders": stmt.excluded.holders,
                 "shares": stmt.excluded.shares,
                 "ratio": stmt.excluded.ratio,
+                "updated_at": func.now(),
             },
         )
 

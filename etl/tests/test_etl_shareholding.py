@@ -1,5 +1,6 @@
 """集保股權分散 loader 與 job 測試。"""
 
+import time
 from datetime import date
 from pathlib import Path
 
@@ -67,6 +68,55 @@ def test_upsert_寫入_24_筆_未知代號_1(clean_db):
 
     assert result.written == 24
     assert result.skipped_unknown == 1
+
+
+def test_upsert_重載時_updated_at_會更新(clean_db):
+    """重複 upsert 同一批集保資料時，updated_at 必須被更新（U-15）。"""
+    from twstock_etl.loaders.stock import upsert_stocks
+    from twstock_etl.models import StockRecord
+
+    with clean_db.begin() as conn:
+        upsert_stocks(
+            conn,
+            [
+                StockRecord(
+                    stock_id="2330",
+                    name="台積電",
+                    market="TWSE",
+                    industry=None,
+                    listed_date=None,
+                    is_etf=False,
+                    isin_code=None,
+                    cfi_code=None,
+                )
+            ],
+        )
+
+    text_csv = (FIXTURE_DIR / "tdcc_shareholding_20260918.csv").read_text(encoding="utf-8")
+    records = [r for r in parse_tdcc_shareholding(text_csv) if r.stock_id == "2330"]
+    assert records, "fixture 應該有 2330 的資料"
+
+    with clean_db.begin() as conn:
+        upsert_shareholding(conn, records)
+        first = conn.execute(
+            select(shareholding_dist.c.updated_at)
+            .where(shareholding_dist.c.stock_id == "2330")
+            .order_by(shareholding_dist.c.level)
+            .limit(1)
+        ).scalar_one()
+
+    time.sleep(0.01)
+
+    with clean_db.begin() as conn:
+        upsert_shareholding(conn, records)
+        second = conn.execute(
+            select(shareholding_dist.c.updated_at)
+            .where(shareholding_dist.c.stock_id == "2330")
+            .order_by(shareholding_dist.c.level)
+            .limit(1)
+        ).scalar_one()
+
+    assert second > first
 
 
 def test_重跑同一份資料不會變成_48_筆(clean_db):

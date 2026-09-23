@@ -410,13 +410,14 @@
   - 完全不升，只記風險——`react-router` 的 critical 已經掛了兩個里程碑，不能再延。
 - 影響與已驗證事項：Architect 在寫規格前**已實跑過完整升級**：`npm test` 9 檔 57 測全過、`npm run build` 0 個 TypeScript error、bundle 406.29 kB／gzip 129.67 kB → 410.39 kB／gzip 131.01 kB（+4.1 kB）。專案只用到 `BrowserRouter`／`MemoryRouter`／`Routes`／`Route`／`Link`／`useParams` 六個 v7 穩定 API，7.18 的破壞性變更都不在其中。因此 T3-0-4 **只准動 `web/package.json` 與 `web/package-lock.json`**；若測試或 build 失敗，代表動到了不該動的東西，停下來回報而不是自行改路由程式。這個任務**獨立一輪審查**，不與其他任務混在同一輪（D-027 的精神：風險等級不同的改動要分開判斷）。
 
-## D-043　`deploy/.env` 建一個指向 `../.env` 的 symlink，修 Compose 找不到密碼的洞
+## D-043　repo 根目錄新增 `docker-compose.yml`（用 `include:` 接 `deploy/docker-compose.yml`），修 Compose 找不到密碼的洞
 
 - 日期：2026-09-23（使用者本機驗證回報）
-- 決策：新增 `deploy/.env` 為指向 `../.env` 的 symlink（並在 `.gitignore` 加 `!deploy/.env` 例外，追蹤的是 symlink 本身，不是密碼內容）。README §4 的維運指令維持原樣，不強制每條都加 `--env-file`。
+- 決策：在 repo 根目錄新增一個極簡的 `docker-compose.yml`，內容只有 `include: [deploy/docker-compose.yml]`。之後在**根目錄**執行 `docker compose up -d --build`／`docker compose logs -f etl`／`docker compose down` 等，一律不用帶 `-f`、也不用帶 `--env-file`。README §2、§4、§5 等所有指令都改成這個簡化寫法；舊的 `docker compose -f deploy/docker-compose.yml --env-file .env ...` 寫法仍然可用（`deploy/docker-compose.yml` 本身沒有動），兩種寫法都指向同一個 `name: twstock` 專案，操作的是同一組容器。
 - 理由：使用者在本機依 README 操作時回報，`docker compose -f deploy/docker-compose.yml --env-file .env up -d --build`（repo 根目錄執行）成功，但緊接著的 `docker compose -f deploy/docker-compose.yml logs -f etl`（沒帶 `--env-file`）失敗，錯誤與 `x-db-url` 這個 required-variable interpolation（`${POSTGRES_PASSWORD:?請在 .env 設定 POSTGRES_PASSWORD}`）有關，即使 `.env` 內密碼確實有填值。追查後確認：Docker Compose 在沒有明講 `--env-file` 時，預設載入 `.env` 的目錄是**第一個 `-f` 指定的 compose 檔所在目錄**（此專案是 `deploy/`），不是使用者執行指令當下的工作目錄；而 `.env` 依專案慣例放在 repo 根目錄，`deploy/` 底下沒有這個檔案，於是 `POSTGRES_PASSWORD` 在插值時是空的，`:?` guard 直接失敗。這不是使用者操作錯誤——README 第 4 節「常用維運指令」（`logs`／`exec`／`down`）本身就沒有帶 `--env-file`，照抄一定會撞到同一個錯誤。
 - 替代方案：
   - 把 README 每一條指令都補上 `--env-file .env`——治標不治本，只要有一條漏補（或使用者自己臨時打指令）就會再犯，且已經證明維護不了（README 自己就漏了）。
-  - 把 `docker-compose.yml` 搬到 repo 根目錄——影響範圍更大（`deploy/` 目錄的定位、`.dockerignore`、CI 腳本路徑都要跟著動），且與既有目錄慣例（`deploy/` 放部署相關設定）衝突。
-  - 用 `--project-directory .` 取代 symlink——效果類似，但一樣要每條指令都手動加，沒有解決「忘記加就爆」的根因。
-- 影響：`deploy/.env` symlink 存在後，Compose 不論有沒有帶 `--env-file`、也不論從哪個目錄執行，都能透過 `deploy/.env`（symlink 目標 `deploy/../.env` = repo 根目錄的 `.env`）正確解出密碼。使用者機器上原本卡住的 `logs -f etl` 等指令，pull 到這個 commit 後即可正常執行，不需要重新輸入密碼或重建容器。
+  - **先嘗試過 `deploy/.env → ../.env` symlink，撤回了**：在 repo 建立時用的橋接環境（remote-devices）裡 `git config core.symlinks` 是 `false`，`git checkout` 把 symlink 存成一個內容只有 `../.env` 四個字的**純文字檔**，不是真的符號連結；Docker Compose 讀到的是一個格式不對的 dotenv 檔，等於沒修好，而且從那個環境看不出問題（`file` 指令會照樣回報 broken symlink，要 `git config core.symlinks` 才看得出根因）。因為建 repo 當下的環境已經把這個設定寫進 `.git/config`，之後在真正的 Mac 終端機重新 `checkout` 也不會自動變回真符號連結，風險太高、不採用。
+  - 把 `deploy/docker-compose.yml` 搬到 repo 根目錄——影響範圍更大（`deploy/` 目錄的定位、CI 腳本路徑都要跟著動），且與既有目錄慣例（`deploy/` 放部署相關設定）衝突。`include:` 拿到同樣效果但不用搬檔案：`deploy/docker-compose.yml` 內 `build.context: ..` 這類相對路徑，Compose 的 `include` 機制保證仍然相對於被含入檔案自己的目錄解析，行為不變。
+  - 用 `--project-directory .` 取代——效果類似，但一樣要每條指令都手動加，沒有解決「忘記加就爆」的根因。
+- 影響：需要 Docker Compose 2.20.3+（`include:` 語法，2023 年支援）；使用者的 Docker Desktop 版本夠新（前面已成功執行過 `docker compose ... up -d --build`）。使用者機器上原本卡住的 `logs -f etl` 等指令，pull 到這個 commit、在 repo 根目錄重跑即可正常執行，不需要重新輸入密碼或重建容器。**教訓**：這個橋接環境的 git 因為早期環境限制關掉了 `core.symlinks`，之後任何規格或審查若想用 symlink 解決問題，先 `git config core.symlinks` 確認，或乾脆優先找不依賴符號連結的方案。

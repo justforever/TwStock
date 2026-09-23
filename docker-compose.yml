@@ -1,0 +1,12 @@
+# 這個檔案只是把真正的部署設定（deploy/docker-compose.yml）接進 repo 根目錄，
+# 目的是讓 `.env` 能被自動找到——見 D-043。
+#
+# 用法（repo 根目錄，不用帶 -f、也不用帶 --env-file）：
+#   docker compose up -d --build
+#   docker compose logs -f etl
+#   docker compose down
+#
+# 舊寫法 `docker compose -f deploy/docker-compose.yml --env-file .env ...` 仍然可用，
+# 兩種寫法會操作同一組容器（deploy/docker-compose.yml 內已固定 name: twstock）。
+include:
+  - deploy/docker-compose.yml

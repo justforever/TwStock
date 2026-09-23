@@ -63,12 +63,12 @@ cp .env.example .env
 
 `.env` 已在 `.gitignore`，不會進版控。
 
-> **注意**：compose 檔放在 `deploy/` 底下，但 Compose 預設抓 `.env` 的目錄是「compose 檔所在目錄」，不是你執行指令時的路徑，所以只在 repo 根目錄放 `.env` 是不夠的——沒帶 `--env-file` 的指令（例如 `logs`、`exec`、`down`）會抓不到密碼，出現 `required variable POSTGRES_PASSWORD is missing a value`。repo 已內建 `deploy/.env → ../.env` 的 symlink（見 D-043）補這個洞，你不用手動處理；下面所有指令不論有沒有帶 `--env-file .env` 都能正常運作。
+> **注意**：真正的 compose 設定放在 `deploy/docker-compose.yml`，但 Compose 預設抓 `.env` 的目錄是「compose 檔所在目錄」，不是你執行指令時的路徑，所以只在 repo 根目錄放 `.env` 是不夠的——沒帶 `--env-file` 的指令（例如 `logs`、`exec`、`down`）會抓不到密碼，出現 `required variable POSTGRES_PASSWORD is missing a value`。repo 根目錄已內建一個 `docker-compose.yml`（用 Compose 的 `include:` 接進 `deploy/docker-compose.yml`，見 D-043），下面的指令都改成不帶 `-f`／`--env-file` 直接在根目錄執行即可；舊的 `-f deploy/docker-compose.yml --env-file .env` 寫法也還能用，操作的是同一組容器。
 
 ### 2. 啟動
 
 ```bash
-docker compose -f deploy/docker-compose.yml --env-file .env up -d --build
+docker compose up -d --build
 ```
 
 首次執行會下載映像（`timescale/timescaledb:2.21.3-pg16`、`python:3.12-slim-bookworm`、`node:22-alpine`、`nginx:1.27-alpine`）並建置三個自家映像，依網速約需 5～15 分鐘。
@@ -89,23 +89,23 @@ docker compose -f deploy/docker-compose.yml --env-file .env up -d --build
 
 ```bash
 # 看 ETL 抓取進度
-docker compose -f deploy/docker-compose.yml logs -f etl
+docker compose logs -f etl
 
 # 確認 migrate 有跑完
-docker compose -f deploy/docker-compose.yml logs migrate
+docker compose logs migrate
 
 # 確認 TimescaleDB 擴充已安裝
-docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -c '\dx'
+docker compose exec db psql -U twstock -d twstock -c '\dx'
 
 # 看載入了幾檔
-docker compose -f deploy/docker-compose.yml exec db \
+docker compose exec db \
   psql -U twstock -d twstock -c "SELECT market, count(*) FROM stock GROUP BY market;"
 
 # 停止（保留資料）
-docker compose -f deploy/docker-compose.yml down
+docker compose down
 
 # 停止並刪除資料庫磁碟區（資料全清）
-docker compose -f deploy/docker-compose.yml down -v
+docker compose down -v
 ```
 
 ### 5. 手動以真實來源載入個股清單
@@ -114,15 +114,15 @@ docker compose -f deploy/docker-compose.yml down -v
 
 ```bash
 # 上市（TWSE，來源 https://isin.twse.com.tw/isin/C_public.jsp?strMode=2）
-docker compose -f deploy/docker-compose.yml exec etl \
+docker compose exec etl \
   python -m twstock_etl.cli load-stocks --market TWSE
 
 # 上櫃（TPEx，來源 https://isin.twse.com.tw/isin/C_public.jsp?strMode=4）
-docker compose -f deploy/docker-compose.yml exec etl \
+docker compose exec etl \
   python -m twstock_etl.cli load-stocks --market TPEx
 
 # 交易日曆（來源 TWSE OpenAPI holidaySchedule，預設抓台北時間今年）
-docker compose -f deploy/docker-compose.yml exec etl \
+docker compose exec etl \
   python -m twstock_etl.cli load-calendar
 ```
 
@@ -159,7 +159,7 @@ export DATABASE_URL="postgresql+psycopg://twstock:<你的密碼>@127.0.0.1:5432/
 **做法 B：不想在 Mac 裝 Python，就把 `scripts/` 掛進容器跑一次性任務**
 
 ```bash
-docker compose -f deploy/docker-compose.yml --env-file .env run --rm \
+docker compose run --rm \
   -v "$PWD/scripts:/app/scripts" etl \
   python /app/scripts/backfill.py price --market TWSE --from 2021-01-04 --to 2026-09-18
 ```
@@ -209,7 +209,7 @@ caffeinate -i .venv/bin/python scripts/backfill.py price --market TWSE \
 - 看目前進度：`http://localhost:8080/admin/etl`，或
 
 ```bash
-docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -c \
+docker compose exec db psql -U twstock -d twstock -c \
   "SELECT job_name, max(target_date) FILTER (WHERE status='success') AS 最新成功日
      FROM etl_job_log GROUP BY job_name ORDER BY job_name;"
 ```
@@ -233,9 +233,9 @@ docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -
 #### 6.5 回補完成後的抽查
 
 ```bash
-docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -c \
+docker compose exec db psql -U twstock -d twstock -c \
   "SELECT source, count(*) AS 列數, min(trade_date), max(trade_date) FROM daily_price GROUP BY source;"
-docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -c \
+docker compose exec db psql -U twstock -d twstock -c \
   "SELECT count(*) FROM adj_factor;"
 ```
 
@@ -269,7 +269,7 @@ docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -
 看有沒有抓到：<http://localhost:8080/admin/etl>，或
 
 ```bash
-docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -c \
+docker compose exec db psql -U twstock -d twstock -c \
   "SELECT job_name, max(target_date) FILTER (WHERE status='success') AS 最新成功日, count(*) FILTER (WHERE status='failed') AS 失敗次數
      FROM etl_job_log
     WHERE job_name IN ('institutional_twse','institutional_tpex','margin_twse','margin_tpex','sbl_twse','foreign_holding_twse','shareholding_tdcc')
@@ -287,7 +287,7 @@ docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -
 5. **補救只有一個視窗：在官方換檔之前手動跑一次。** 週一到週五發現上週沒抓到，只要官方還沒被下一個週五的檔覆蓋，手動跑仍然抓得到那一週：
 
    ```bash
-   docker compose -f deploy/docker-compose.yml exec etl \
+   docker compose exec etl \
      python -m twstock_etl.cli load-shareholding
    ```
 
@@ -303,7 +303,7 @@ docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -
 平時不需要（排程會跑）。想補某一天、或想立刻驗證來源格式時：
 
 ```bash
-docker compose -f deploy/docker-compose.yml exec etl \
+docker compose exec etl \
   python -m twstock_etl.cli load-chip --kind institutional --market TWSE --date 2026-09-18
 ```
 
@@ -354,7 +354,7 @@ caffeinate -i .venv/bin/python -m twstock_etl.cli backfill chip --kind margin --
 #### 7.5 籌碼回補完成後的抽查
 
 ```bash
-docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -c \
+docker compose exec db psql -U twstock -d twstock -c \
   "SELECT 'institutional' AS 表, count(*), min(trade_date), max(trade_date) FROM institutional_daily
    UNION ALL SELECT 'margin', count(*), min(trade_date), max(trade_date) FROM margin_daily
    UNION ALL SELECT 'foreign', count(*), min(trade_date), max(trade_date) FROM foreign_holding
@@ -364,7 +364,7 @@ docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -
 **一定要做的一項人工核對（規格 §7 V-13）**：融資融券的來源數量單位是「張」，loader 一律 ×1000 存成「股」（`docs/decisions.md` D-036）。挑一天對一下：
 
 ```bash
-docker compose -f deploy/docker-compose.yml exec db psql -U twstock -d twstock -c \
+docker compose exec db psql -U twstock -d twstock -c \
   "SELECT trade_date, margin_balance, short_balance FROM margin_daily WHERE stock_id='2330' ORDER BY trade_date DESC LIMIT 3;"
 ```
 

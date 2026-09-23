@@ -1,6 +1,4 @@
 .env
-# 例外：deploy/.env 是指向 ../.env 的 symlink（不是真的密碼檔本身），見 D-043
-!deploy/.env
 __pycache__/
 *.pyc
 .venv/

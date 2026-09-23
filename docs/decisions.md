@@ -409,3 +409,14 @@
   - 全部升到最新（`vite@8`／`vitest@5`／`plugin-react@6`）——四五個大版本一起跳，一旦測試掛掉無法判斷是誰造成的。
   - 完全不升，只記風險——`react-router` 的 critical 已經掛了兩個里程碑，不能再延。
 - 影響與已驗證事項：Architect 在寫規格前**已實跑過完整升級**：`npm test` 9 檔 57 測全過、`npm run build` 0 個 TypeScript error、bundle 406.29 kB／gzip 129.67 kB → 410.39 kB／gzip 131.01 kB（+4.1 kB）。專案只用到 `BrowserRouter`／`MemoryRouter`／`Routes`／`Route`／`Link`／`useParams` 六個 v7 穩定 API，7.18 的破壞性變更都不在其中。因此 T3-0-4 **只准動 `web/package.json` 與 `web/package-lock.json`**；若測試或 build 失敗，代表動到了不該動的東西，停下來回報而不是自行改路由程式。這個任務**獨立一輪審查**，不與其他任務混在同一輪（D-027 的精神：風險等級不同的改動要分開判斷）。
+
+## D-043　`deploy/.env` 建一個指向 `../.env` 的 symlink，修 Compose 找不到密碼的洞
+
+- 日期：2026-09-23（使用者本機驗證回報）
+- 決策：新增 `deploy/.env` 為指向 `../.env` 的 symlink（並在 `.gitignore` 加 `!deploy/.env` 例外，追蹤的是 symlink 本身，不是密碼內容）。README §4 的維運指令維持原樣，不強制每條都加 `--env-file`。
+- 理由：使用者在本機依 README 操作時回報，`docker compose -f deploy/docker-compose.yml --env-file .env up -d --build`（repo 根目錄執行）成功，但緊接著的 `docker compose -f deploy/docker-compose.yml logs -f etl`（沒帶 `--env-file`）失敗，錯誤與 `x-db-url` 這個 required-variable interpolation（`${POSTGRES_PASSWORD:?請在 .env 設定 POSTGRES_PASSWORD}`）有關，即使 `.env` 內密碼確實有填值。追查後確認：Docker Compose 在沒有明講 `--env-file` 時，預設載入 `.env` 的目錄是**第一個 `-f` 指定的 compose 檔所在目錄**（此專案是 `deploy/`），不是使用者執行指令當下的工作目錄；而 `.env` 依專案慣例放在 repo 根目錄，`deploy/` 底下沒有這個檔案，於是 `POSTGRES_PASSWORD` 在插值時是空的，`:?` guard 直接失敗。這不是使用者操作錯誤——README 第 4 節「常用維運指令」（`logs`／`exec`／`down`）本身就沒有帶 `--env-file`，照抄一定會撞到同一個錯誤。
+- 替代方案：
+  - 把 README 每一條指令都補上 `--env-file .env`——治標不治本，只要有一條漏補（或使用者自己臨時打指令）就會再犯，且已經證明維護不了（README 自己就漏了）。
+  - 把 `docker-compose.yml` 搬到 repo 根目錄——影響範圍更大（`deploy/` 目錄的定位、`.dockerignore`、CI 腳本路徑都要跟著動），且與既有目錄慣例（`deploy/` 放部署相關設定）衝突。
+  - 用 `--project-directory .` 取代 symlink——效果類似，但一樣要每條指令都手動加，沒有解決「忘記加就爆」的根因。
+- 影響：`deploy/.env` symlink 存在後，Compose 不論有沒有帶 `--env-file`、也不論從哪個目錄執行，都能透過 `deploy/.env`（symlink 目標 `deploy/../.env` = repo 根目錄的 `.env`）正確解出密碼。使用者機器上原本卡住的 `logs -f etl` 等指令，pull 到這個 commit 後即可正常執行，不需要重新輸入密碼或重建容器。

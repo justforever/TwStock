@@ -63,6 +63,8 @@ cp .env.example .env
 
 `.env` 已在 `.gitignore`，不會進版控。
 
+> **注意**：compose 檔放在 `deploy/` 底下，但 Compose 預設抓 `.env` 的目錄是「compose 檔所在目錄」，不是你執行指令時的路徑，所以只在 repo 根目錄放 `.env` 是不夠的——沒帶 `--env-file` 的指令（例如 `logs`、`exec`、`down`）會抓不到密碼，出現 `required variable POSTGRES_PASSWORD is missing a value`。repo 已內建 `deploy/.env → ../.env` 的 symlink（見 D-043）補這個洞，你不用手動處理；下面所有指令不論有沒有帶 `--env-file .env` 都能正常運作。
+
 ### 2. 啟動
 
 ```bash
